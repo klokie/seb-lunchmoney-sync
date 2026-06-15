@@ -1,0 +1,23 @@
+# Secrets — never commit
+*.pem
+*.key
+.env
+.env.*
+secrets/
+*.p12
+*.pfx
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+dist/
+build/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
