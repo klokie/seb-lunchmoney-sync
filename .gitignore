@@ -3,6 +3,7 @@
 *.key
 .env
 .env.*
+!.env.example
 secrets/
 *.p12
 *.pfx

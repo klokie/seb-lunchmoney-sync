@@ -20,8 +20,56 @@ SEB Företag ──(BankID consent)──> Enable Banking API ──> sync scrip
 
 ## Status
 
-Early scaffold. See [PRIVACY.md](PRIVACY.md) and [TERMS.md](TERMS.md) (required
-URLs for the Enable Banking application registration).
+Scaffold + first implementation. Auth flow, transaction fetch, mapping, and
+Lunch Money insert are wired with a `--dry-run` default. Field shapes from
+Enable Banking are per the public docs and should be confirmed on the first
+live `sync --dry-run` (it prints the mapped objects).
+
+See [PRIVACY.md](PRIVACY.md) and [TERMS.md](TERMS.md) (the required URLs for the
+Enable Banking application registration).
+
+## Install
+
+```bash
+cd ~/src/seb-lunchmoney-sync
+python3 -m venv .venv && . .venv/bin/activate
+pip install -e .
+```
+
+## Secrets
+
+Pulled at runtime from **1Password** (personal account `grossfeld`, vault
+`Personal`) — nothing on disk:
+
+- Enable Banking private key + `application_id` → item
+  _"Enable Banking — klokie-lunchmoney-sync"_.
+- Lunch Money token → item `3vrk4of6otddew56uuo5icpofa`, field `credential`.
+
+The `op` CLI defaults to the Werlabs work account, so `OP_ACCOUNT` pins the
+personal account id. Copy `.env.example` → `.env` to override any lookup.
+
+## Usage
+
+```bash
+seb-sync auth                       # one-time BankID consent (~90-day session)
+seb-sync accounts                   # list authorized accounts + uids
+seb-sync sync --dry-run             # fetch + map, print proposed inserts (no POST)
+seb-sync sync --asset-id <N> --commit   # insert into Lunch Money
+```
+
+## Components
+
+| Module               | Role                                                       |
+| -------------------- | ---------------------------------------------------------- |
+| `config.py`          | env-driven config + defaults                               |
+| `secrets.py`         | resolve key/app_id/token from 1Password (`op`, pinned acct)|
+| `enablebanking.py`   | JWT auth, consent flow, sessions, transactions             |
+| `lunchmoney.py`      | thin Lunch Money client (`POST /v1/transactions`)          |
+| `mapper.py`          | EB transaction → Lunch Money insert (+ `external_id` dedupe)|
+| `callback_server.py` | one-shot HTTPS `localhost:8080` listener for the redirect  |
+| `cli.py`             | `auth` / `accounts` / `sync` commands                      |
+
+Reference pattern: `ynab-api-import` (aggregator → budgeting app).
 
 ## Secrets
 
