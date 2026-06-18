@@ -30,16 +30,19 @@ Enable Banking application registration).
 
 ## Install
 
-Use an explicit Homebrew interpreter for the venv. (On some machines `python3`
-resolves to a broken Anaconda at `/opt/homebrew/anaconda3/bin` whose `python`
-binary is missing — `pip` then fails with "bad interpreter".)
-
 ```bash
 cd ~/src/seb-lunchmoney-sync
-/opt/homebrew/bin/python3.13 -m venv .venv
-./.venv/bin/python -m pip install -e .
-./.venv/bin/seb-sync --help        # or: source .venv/bin/activate
+make install
+make run ARGS='--help'        # or: ./.venv/bin/seb-sync --help
 ```
+
+> **Do not run a bare `pip install -e .`.** On these machines `pip`/`python3`
+> resolve to Anaconda at `/opt/homebrew/anaconda3/bin` — which is both broken
+> ("bad interpreter") on some boxes and pollutes the conda **base** env on
+> others, producing a wall of `ERROR: ... dependency conflicts` about conda's
+> own packages. The `Makefile` always builds an isolated venv from Homebrew's
+> `python3.13`, sidestepping both problems. Override the interpreter with
+> `make install PY=/path/to/python3` if needed.
 
 ## Secrets
 
