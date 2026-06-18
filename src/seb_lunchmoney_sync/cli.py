@@ -71,6 +71,25 @@ def accounts() -> None:
         click.echo(json.dumps(acc, indent=2))
 
 
+@cli.command(name="lm-assets")
+def lm_assets() -> None:
+    """List Lunch Money manually-managed assets (to find --asset-id)."""
+    lm = LunchMoney()
+    data = lm.assets()
+    assets = data.get("assets", [])
+    if not assets:
+        click.echo("No manually-managed assets. Create one in Lunch Money for the SEB account.")
+        return
+    for a in assets:
+        click.echo(
+            f"  asset_id={a.get('id')}  "
+            f"{a.get('name')!r}  "
+            f"[{a.get('type_name')}/{a.get('subtype_name','')}]  "
+            f"{a.get('institution_name','')}  "
+            f"bal={a.get('balance')} {a.get('currency')}"
+        )
+
+
 @cli.command()
 @click.option("--account-uid", help="Enable Banking account uid (default: first in session).")
 @click.option("--asset-id", type=int, default=None, help="Lunch Money asset id to attach to.")
