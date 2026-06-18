@@ -30,10 +30,15 @@ Enable Banking application registration).
 
 ## Install
 
+Use an explicit Homebrew interpreter for the venv. (On some machines `python3`
+resolves to a broken Anaconda at `/opt/homebrew/anaconda3/bin` whose `python`
+binary is missing — `pip` then fails with "bad interpreter".)
+
 ```bash
 cd ~/src/seb-lunchmoney-sync
-python3 -m venv .venv && . .venv/bin/activate
-pip install -e .
+/opt/homebrew/bin/python3.13 -m venv .venv
+./.venv/bin/python -m pip install -e .
+./.venv/bin/seb-sync --help        # or: source .venv/bin/activate
 ```
 
 ## Secrets
