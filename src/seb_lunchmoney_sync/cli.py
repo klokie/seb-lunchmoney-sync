@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import os
 import webbrowser
@@ -67,6 +68,64 @@ def auth(psu_type) -> None:
 
 
 @cli.command()
+@click.option(
+    "--env-file",
+    default="~/.config/enablebanking/env",
+    show_default=True,
+    help="Where to write the env file for unattended runs.",
+)
+@click.option("--force", is_flag=True, help="Overwrite an existing env file.")
+def bootstrap(env_file, force) -> None:
+    """Materialize secrets from 1Password into a 0600 env file, once.
+
+    Unattended runs (cron / LaunchAgent / openclaw) can't answer a 1Password
+    unlock prompt, and this plan has no service accounts. So resolve everything
+    once, interactively, and let scheduled runs read the env file instead.
+
+    Re-run after rotating the key or the Lunch Money token.
+    """
+    from . import secrets as _secrets
+
+    path = Path(os.path.expanduser(env_file))
+    if path.exists() and not force:
+        raise click.ClickException(f"{path} exists. Re-run with --force to replace it.")
+
+    click.echo("Reading from 1Password (expect one unlock prompt)…")
+    app_id = _secrets._op_read(
+        f"op://{config.op_vault}/{config.eb_item}/application_id"
+    )
+    lm_token = _secrets._op_read(
+        f"op://{config.op_vault}/{config.lm_op_item}/{config.lm_op_field}"
+    )
+
+    # The private key is multi-line, so it goes on disk and the env file points
+    # at it rather than trying to inline a PEM.
+    key_path = Path(os.path.expanduser(
+        "~/.config/enablebanking/enablebanking-private.pem"))
+    if not key_path.exists():
+        key_path.parent.mkdir(parents=True, exist_ok=True)
+        key_path.write_text(
+            _secrets._op_read(f"op://{config.op_vault}/{config.eb_item}/credential")
+        )
+        key_path.chmod(0o600)
+        click.echo(f"Wrote private key → {key_path}")
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "# Written by `seb-sync bootstrap`. Contains a live Lunch Money token —\n"
+        "# keep mode 0600 and out of git. Re-run bootstrap after rotating.\n"
+        f"EB_APPLICATION_ID={app_id}\n"
+        f"EB_PRIVATE_KEY_PATH={key_path}\n"
+        f"LUNCHMONEY_API_TOKEN={lm_token}\n"
+    )
+    path.chmod(0o600)
+    click.echo(f"Wrote {path} (0600)\n")
+    click.echo("Unattended runs — source it first, then `op` is never called:\n")
+    click.echo(f"  set -a; . {path}; set +a")
+    click.echo("  seb-sync sync --account-uid <uid> --asset-id <id> --date-from <d> --commit")
+
+
+@cli.command()
 def check() -> None:
     """Verify the EB app accepts a JWT signed by our private key.
 
@@ -90,7 +149,27 @@ def check() -> None:
                 "'klokie-lunchmoney-sync' app at enablebanking.com, then re-run."
             )
         raise click.ClickException("Unexpected auth failure — see body above.")
-    click.echo("✓ JWT accepted — cert matches. Ready for `seb-sync auth`.")
+    click.echo("✓ JWT accepted — cert matches.")
+
+    # Consent expires every ~90 days; a scheduled run would otherwise just start
+    # failing one morning with no explanation.
+    p = Path(os.path.expanduser(config.session_path))
+    if not p.exists():
+        click.echo("! No session yet — run `seb-sync auth`.")
+    else:
+        session = json.loads(p.read_text())
+        valid_until = (session.get("access") or {}).get("valid_until")
+        if valid_until:
+            expires = dt.datetime.fromisoformat(valid_until.replace("Z", "+00:00"))
+            days = (expires - dt.datetime.now(dt.timezone.utc)).days
+            accounts = len(session.get("accounts", []))
+            marker = "✓" if days > 14 else "!"
+            click.echo(
+                f"{marker} Consent: {accounts} account(s), "
+                f"{days} days left (until {expires.date()})."
+            )
+            if days <= 14:
+                click.echo("  Re-authorize soon: `seb-sync auth`.")
     click.echo(json.dumps(app, indent=2))
 
 

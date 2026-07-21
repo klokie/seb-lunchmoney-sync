@@ -7,20 +7,37 @@ The `op` CLI defaults to the Werlabs (work) account, so every call pins
 
 from __future__ import annotations
 
+import functools
 import os
 import subprocess
 
 from .config import config
 
 
+@functools.lru_cache(maxsize=None)
 def _op_read(ref: str) -> str:
-    """`op read op://<vault>/<item>/<field>` against the personal account."""
-    out = subprocess.run(
-        ["op", "read", "--account", config.op_account, ref],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    """`op read op://<vault>/<item>/<field>` against the personal account.
+
+    Cached per process: a single `sync` run needs three secrets, and without
+    this each one spawns its own `op` (and its own unlock prompt).
+
+    For unattended runs don't rely on this at all — `seb-sync bootstrap` writes
+    the values to an env file so scheduled runs never invoke `op`.
+    """
+    try:
+        out = subprocess.run(
+            ["op", "read", "--account", config.op_account, ref],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        raise RuntimeError(
+            f"Need {ref} but the `op` CLI is not available.\n"
+            "For unattended runs, source the env file written by "
+            "`seb-sync bootstrap`:\n"
+            "  set -a; . ~/.config/enablebanking/env; set +a"
+        ) from None
     return out.stdout.strip()
 
 
