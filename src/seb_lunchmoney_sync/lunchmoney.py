@@ -63,6 +63,26 @@ class LunchMoney:
                 results.setdefault("other", []).append(payload)
         return results
 
+    def transactions(self, asset_id: int, start_date: str, end_date: str) -> list[dict]:
+        """Transactions already in Lunch Money for one asset.
+
+        Used to work out what is genuinely new. Note the `amount` that comes
+        back is in Lunch Money's own convention (expenses positive), i.e. the
+        opposite sign to what we send under `debit_as_negative`, so compare on
+        absolute value.
+        """
+        r = self._client.get(
+            "/v1/transactions",
+            params={
+                "asset_id": asset_id,
+                "start_date": start_date,
+                "end_date": end_date,
+                "limit": 1000,
+            },
+        )
+        r.raise_for_status()
+        return r.json().get("transactions", [])
+
     def assets(self) -> dict:
         r = self._client.get("/v1/assets")
         r.raise_for_status()

@@ -256,5 +256,114 @@ def sync(account_uid, asset_id, date_from, dry_run, limit, include_pending) -> N
     click.echo(f"Inserted: {json.dumps(result)}")
 
 
+def _norm_payee(p: str | None) -> str:
+    return (p or "").strip().upper()
+
+
+@cli.command(name="sync-all")
+@click.option("--dry-run/--commit", default=True, help="Preview vs actually insert.")
+@click.option(
+    "--date-tolerance",
+    type=int,
+    default=3,
+    show_default=True,
+    help="Days of slack when matching against existing rows. Lunch Flow dated "
+    "the same transaction 1-2 days off from Enable Banking, so exact date "
+    "matching would duplicate the handover period.",
+)
+@click.option(
+    "--lookback-days",
+    type=int,
+    default=14,
+    show_default=True,
+    help="How far back to re-examine. Bigger is safe — anything already in "
+    "Lunch Money is filtered out, so this only costs a little API time.",
+)
+@click.option(
+    "--map-file",
+    default="~/.config/enablebanking/accounts.json",
+    show_default=True,
+    help="IBAN → asset_id map. Keyed by IBAN because account_uids rotate on "
+    "every re-consent.",
+)
+def sync_all(dry_run, date_tolerance, lookback_days, map_file) -> None:
+    """Sync every mapped account, inserting only what Lunch Money lacks.
+
+    Built for repeated unattended runs. Rather than tracking a high-water mark
+    (which loses transactions that post later on a day already synced), this
+    re-examines a window and filters against what Lunch Money actually holds:
+
+      * same `external_id`  → already inserted by this tool
+      * same (date, |amount|) → almost certainly the same transaction from
+        another sync (Lunch Flow/GoCardless rows carry different external_ids,
+        so id-matching alone would happily duplicate them)
+
+    That makes the run idempotent and safe at any frequency.
+    """
+    session = _load_session()
+    mapping = json.loads(Path(os.path.expanduser(map_file)).read_text())
+
+    today = dt.date.today()
+    start = (today - dt.timedelta(days=lookback_days)).isoformat()
+    end = (today + dt.timedelta(days=365)).isoformat()  # pending sit in the future
+
+    eb = EnableBanking()
+    lm = LunchMoney()
+    grand_total = 0
+
+    for acc in session.get("accounts", []):
+        iban = (acc.get("account_id") or {}).get("iban")
+        entry = mapping.get(iban or "")
+        if not entry:
+            click.echo(f"– {acc.get('product')} ({iban}): not in map, skipping.")
+            continue
+
+        asset_id, label = entry["asset_id"], entry["label"]
+        existing = lm.transactions(asset_id, start, end)
+        seen_ids = {t.get("external_id") for t in existing if t.get("external_id")}
+        # (amount, payee) -> dates already present. Deliberately NOT keyed on
+        # date: Lunch Flow/GoCardless dated the same transaction 1-2 days
+        # differently from Enable Banking, so exact date matching would let
+        # historical rows through as "new" and duplicate them.
+        seen_by_amt: dict[tuple[str, str], list[dt.date]] = {}
+        for t in existing:
+            key = (f'{abs(float(t["amount"])):.2f}', _norm_payee(t.get("payee")))
+            seen_by_amt.setdefault(key, []).append(dt.date.fromisoformat(t["date"]))
+
+        raw = [t for t in eb.transactions(acc["uid"], date_from=start)
+               if t.get("status") != "PDNG"]
+        mapped = mapper.map_all(raw, asset_id)
+
+        fresh = []
+        for m in mapped:
+            if not m["date"] or m["date"] < start:
+                continue
+            if m["external_id"] in seen_ids:
+                continue
+            key = (f'{abs(float(m["amount"])):.2f}', _norm_payee(m["payee"]))
+            near = seen_by_amt.get(key, [])
+            d = dt.date.fromisoformat(m["date"])
+            if any(abs((d - o).days) <= date_tolerance for o in near):
+                continue
+            fresh.append(m)
+
+        click.echo(
+            f"{'•' if fresh else '–'} {label}: {len(existing)} in LM, "
+            f"{len(mapped)} from SEB since {start} → {len(fresh)} new"
+        )
+        for m in fresh:
+            click.echo(f"    {m['date']}  {m['amount']:>12}  {m['payee'][:38]}")
+
+        grand_total += len(fresh)
+        if fresh and not dry_run:
+            res = lm.insert_transactions(fresh)
+            click.echo(f"    inserted {len(res.get('ids', []))}")
+
+    if dry_run:
+        click.echo(f"\nDRY RUN — {grand_total} would be inserted. Use --commit.")
+    else:
+        click.echo(f"\nDone — {grand_total} inserted.")
+
+
 if __name__ == "__main__":
     cli()

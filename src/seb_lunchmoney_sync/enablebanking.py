@@ -49,9 +49,26 @@ class EnableBanking:
         return {"Authorization": f"Bearer {_make_jwt(self._app_id, self._key)}"}
 
     def _request(self, method: str, path: str, **kw: Any) -> dict:
-        r = self._client.request(method, path, headers=self._auth_header(), **kw)
-        r.raise_for_status()
-        return r.json() if r.content else {}
+        """Enable Banking rate-limits (429), which matters for a job that runs
+        several times a day or asks for a wide date range. Back off and retry
+        rather than dying, and fail with something readable if it persists."""
+        delay = 2.0
+        for attempt in range(4):
+            r = self._client.request(method, path, headers=self._auth_header(), **kw)
+            if r.status_code != 429:
+                r.raise_for_status()
+                return r.json() if r.content else {}
+            if attempt == 3:
+                raise RuntimeError(
+                    "Enable Banking is rate-limiting (429) and did not recover "
+                    "after 4 attempts. Narrow --lookback-days, or run the job "
+                    "less often."
+                )
+            retry_after = r.headers.get("Retry-After")
+            wait = float(retry_after) if (retry_after or "").isdigit() else delay
+            time.sleep(wait)
+            delay *= 3
+        raise AssertionError("unreachable")
 
     def application(self) -> dict:
         """Read back the registered application. Requires only a valid JWT, so
