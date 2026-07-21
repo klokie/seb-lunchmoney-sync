@@ -1,8 +1,11 @@
 """Resolve secrets from 1Password via the `op` CLI.
 
-The `op` CLI defaults to the Werlabs (work) account, so every call pins
-`--account` to the personal account explicitly. See the vault memory note
-"Confirm 1Password vault before storing secrets".
+When signed into more than one 1Password account, `op` resolves against
+whichever it prefers, so every call pins `--account` explicitly. Set
+OP_ACCOUNT (see .env.example); there is no default.
+
+For unattended runs, prefer `seb-sync bootstrap` — a scheduled job cannot
+answer an unlock prompt.
 """
 
 from __future__ import annotations
