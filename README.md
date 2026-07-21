@@ -1,48 +1,102 @@
 # seb-lunchmoney-sync
 
-Personal tool to fetch my own SEB bank account transactions via
-[Enable Banking](https://enablebanking.com) and import them into
-[Lunch Money](https://lunchmoney.app).
+Sync European bank transactions into [Lunch Money](https://lunchmoney.app) via
+[Enable Banking](https://enablebanking.com), a PSD2 account-information
+provider with good Nordic coverage.
 
-Built to route around the broken Lunch Flow / GoCardless SEB integration.
+Built for **SEB (Sweden)** — which is what it has been tested against — but the
+bank is configuration, not code: set `EB_ASPSP_NAME` / `EB_ASPSP_COUNTRY` for
+any institution Enable Banking supports.
+
+Useful if your bank has no native Lunch Money connection, or its managed sync
+keeps breaking. Enable Banking's self-serve tier is free for personal use, so
+you run the aggregator layer yourself.
 
 ## Architecture
 
 ```
-SEB Företag ──(BankID consent)──> Enable Banking API ──> sync script ──> Lunch Money API
-                                  (fetch transactions)   (dedupe + map)  (insert_transactions)
+Your bank ──(BankID / bank consent)──> Enable Banking API ──> sync ──> Lunch Money API
+                                       (fetch transactions)  (map +   (insert_transactions)
+                                                              dedupe)
 ```
 
 - **Aggregator:** Enable Banking (Restricted Production), JWT-signed REST API.
-- **Sink:** Lunch Money API (`POST /v1/transactions`), batch insert with
+- **Sink:** Lunch Money API (`POST /v1/transactions`), chunked insert with
   `external_id` dedupe.
-- **Schedule:** daily (cron / Lambda).
+- **Schedule:** any interval — `sync-all` is idempotent. A launchd example is
+  in [`ops/`](ops/).
 
 ## Status
 
-Scaffold + first implementation. Auth flow, transaction fetch, mapping, and
-Lunch Money insert are wired with a `--dry-run` default. Field shapes from
-Enable Banking are per the public docs and should be confirmed on the first
-live `sync --dry-run` (it prints the mapped objects).
+Working and in daily use against SEB. Auth, fetch, mapping, and insert are all
+verified against live data; `sync` defaults to `--dry-run`.
 
-See [PRIVACY.md](PRIVACY.md) and [TERMS.md](TERMS.md) (the required URLs for the
-Enable Banking application registration).
+Behaviour worth knowing before you point it at an account that already has
+history:
+
+- **`sync-all` only inserts what Lunch Money lacks.** It compares on
+  `external_id` and on (amount, payee) within a few days' tolerance, because
+  two providers routinely date the same transaction differently. Safe to run
+  repeatedly.
+- **Pending transactions are skipped by default.** They carry no stable id, so
+  inserting one now means a duplicate when it books later. `--include-pending`
+  if you want them anyway.
+- **Consent expires (~90 days)** and renewal needs interactive bank auth, so a
+  scheduled job can never be fully unattended. `seb-sync check` reports days
+  remaining.
+
+See [PRIVACY.md](PRIVACY.md) and [TERMS.md](TERMS.md) — the URLs required when
+registering an Enable Banking application.
 
 ## Install
 
+Requires Python 3.10+ and an [Enable Banking](https://enablebanking.com)
+application (free self-serve; see [Setup](#setup)).
+
 ```bash
-cd ~/src/seb-lunchmoney-sync
-make install
+git clone https://github.com/klokie/seb-lunchmoney-sync
+cd seb-lunchmoney-sync
+make install                  # builds an isolated .venv
 make run ARGS='--help'        # or: ./.venv/bin/seb-sync --help
 ```
 
-> **Do not run a bare `pip install -e .`.** On these machines `pip`/`python3`
-> resolve to Anaconda at `/opt/homebrew/anaconda3/bin` — which is both broken
-> ("bad interpreter") on some boxes and pollutes the conda **base** env on
-> others, producing a wall of `ERROR: ... dependency conflicts` about conda's
-> own packages. The `Makefile` always builds an isolated venv from Homebrew's
-> `python3.13`, sidestepping both problems. Override the interpreter with
-> `make install PY=/path/to/python3` if needed.
+`make install` deliberately builds a venv rather than running a bare
+`pip install -e .`, which on machines where `python3` resolves to Anaconda
+installs into the conda **base** environment and emits a wall of dependency
+conflicts. Override the interpreter with `make install PY=/path/to/python3`.
+
+## Setup
+
+1. Register an application at
+   [enablebanking.com](https://enablebanking.com) — Production (Restricted)
+   lets you whitelist your own accounts. Choose *"Generate outside the browser
+   and import public certificate"* and paste in your certificate:
+   ```bash
+   openssl genrsa -out private.key 2048
+   openssl req -new -x509 -days 3650 -key private.key -out public.crt \
+     -subj "/CN=my-lunchmoney-sync"
+   ```
+   The certificate **cannot be replaced later** — rotating the key means
+   registering a new application.
+2. Link your account in the control panel ("Activate by linking accounts").
+   Note the *usage type* you pick: it must match `EB_PSU_TYPE`.
+3. Copy `.env.example` → `.env` and fill in the ids, or run
+   `seb-sync bootstrap` if you keep secrets in 1Password.
+4. `seb-sync check` → `seb-sync auth` → `seb-sync sync-all --dry-run`.
+
+Map your accounts to Lunch Money assets in
+`~/.config/enablebanking/accounts.json`, keyed by IBAN (account uids rotate on
+every re-consent):
+
+```json
+{
+  "SE0000000000000000000000": { "asset_id": 123456, "label": "Everyday account" }
+}
+```
+
+Find `asset_id` values with `seb-sync lm-assets`. Verify the pairing against
+real data before committing — an account's reported product name is not always
+what you assume it is.
 
 ## Secrets
 
@@ -81,11 +135,20 @@ anything.
 ## Usage
 
 ```bash
-seb-sync auth                       # one-time BankID consent (~90-day session)
+seb-sync check                      # cert health + consent days remaining
+seb-sync auth                       # one-time bank consent (~90-day session)
 seb-sync accounts                   # list authorized accounts + uids
-seb-sync sync --dry-run             # fetch + map, print proposed inserts (no POST)
-seb-sync sync --asset-id <N> --commit   # insert into Lunch Money
+seb-sync lm-assets                  # list Lunch Money assets (to find asset_id)
+
+seb-sync sync-all --dry-run         # preview across all mapped accounts
+seb-sync sync-all --commit          # insert whatever Lunch Money is missing
+
+# single account, explicit window
+seb-sync sync --account-uid <uid> --asset-id <N> --date-from 2026-07-01 --dry-run
 ```
+
+`sync-all` is what you schedule; `sync` is for one-off backfills where you want
+to control the date range yourself.
 
 ## Components
 
