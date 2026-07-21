@@ -83,6 +83,21 @@ class LunchMoney:
         r.raise_for_status()
         return r.json().get("transactions", [])
 
+    def update_asset_balance(
+        self, asset_id: int, balance: str, balance_as_of: str | None = None
+    ) -> dict:
+        """Set a manually-managed asset's balance.
+
+        Without this the balance only ever moves as a side effect of inserted
+        transactions, so it drifts from the bank whenever anything is missed.
+        """
+        body: dict[str, Any] = {"balance": balance}
+        if balance_as_of:
+            body["balance_as_of"] = balance_as_of
+        r = self._client.put(f"/v1/assets/{asset_id}", json=body)
+        r.raise_for_status()
+        return r.json()
+
     def assets(self) -> dict:
         r = self._client.get("/v1/assets")
         r.raise_for_status()

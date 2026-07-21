@@ -276,6 +276,77 @@ def _norm_payee(p: str | None) -> str:
     return (p or "").strip().upper()
 
 
+def _load_account_map(map_file: str) -> dict:
+    return json.loads(Path(os.path.expanduser(map_file)).read_text())
+
+
+# Prefer the *booked* balance over the available one. `sync` skips pending
+# transactions, so booked is the figure that reconciles with the ledger we
+# actually write; available (ITAV) includes pending and would never tie out.
+# SEB returns ITBD (interim booked) rather than CLBD.
+_BALANCE_PREFERENCE = ("CLBD", "PRCD", "ITBD", "ITAV", "XPCD")
+
+
+def _pick_balance(balances: list[dict]) -> tuple[str | None, str | None, str | None]:
+    """-> (amount, currency, balance_type). Defensive: field shapes vary."""
+    by_type: dict[str, dict] = {}
+    for b in balances:
+        t = (b.get("balance_type") or b.get("name") or "").upper()
+        by_type.setdefault(t, b)
+    for want in _BALANCE_PREFERENCE:
+        b = by_type.get(want)
+        if b:
+            amt = b.get("balance_amount") or {}
+            if amt.get("amount") is not None:
+                return str(amt["amount"]), amt.get("currency"), want
+    for b in balances:  # nothing recognised — take whatever has an amount
+        amt = b.get("balance_amount") or {}
+        if amt.get("amount") is not None:
+            return str(amt["amount"]), amt.get("currency"), (
+                b.get("balance_type") or "?"
+            )
+    return None, None, None
+
+
+@_cli.command()
+@click.option("--dry-run/--commit", default=True, help="Preview vs write to Lunch Money.")
+@click.option(
+    "--map-file",
+    default="~/.config/enablebanking/accounts.json",
+    show_default=True,
+    help="IBAN → asset_id map (same file sync-all uses).",
+)
+def balances(dry_run, map_file) -> None:
+    """Write current bank balances onto the mapped Lunch Money assets.
+
+    Separate from `sync-all` on purpose: this spends a second PSD2 request per
+    account, and the bank allows only ~4 per account per day. Run it once
+    daily, not on every sync.
+    """
+    session = _load_session()
+    mapping = _load_account_map(map_file)
+    eb = EnableBanking()
+    lm = LunchMoney()
+    now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat()
+
+    for acc in session.get("accounts", []):
+        iban = (acc.get("account_id") or {}).get("iban")
+        entry = mapping.get(iban or "")
+        if not entry:
+            continue
+        asset_id, label = entry["asset_id"], entry["label"]
+        raw = eb.balances(acc["uid"])
+        amount, currency, btype = _pick_balance(raw)
+        if amount is None:
+            click.echo(f"– {label}: no usable balance in {len(raw)} entries")
+            continue
+        click.echo(f"• {label}: {amount} {currency or ''} [{btype}] → asset {asset_id}")
+        if not dry_run:
+            lm.update_asset_balance(asset_id, amount, now)
+
+    click.echo("\nDRY RUN — use --commit to write." if dry_run else "\nBalances updated.")
+
+
 @_cli.command(name="sync-all")
 @click.option("--dry-run/--commit", default=True, help="Preview vs actually insert.")
 @click.option(

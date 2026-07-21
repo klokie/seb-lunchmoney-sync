@@ -118,6 +118,16 @@ class EnableBanking:
 
     # --- data ---
 
+    def balances(self, account_uid: str) -> list[dict]:
+        """Current balances for an account.
+
+        Counts against the bank's PSD2 quota exactly like a transactions call,
+        so treat it as a second request per account and budget accordingly.
+        """
+        return self._request("GET", f"/accounts/{account_uid}/balances").get(
+            "balances", []
+        )
+
     def transactions(
         self, account_uid: str, date_from: str | None = None
     ) -> list[dict]:

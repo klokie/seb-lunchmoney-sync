@@ -51,4 +51,22 @@ fi
 print -r -- "$sync_out" | grep -Ev '^\s*$' | while IFS= read -r line; do
   log "  $line"
 done
+
+# Balances cost a second PSD2 request per account and the bank allows only ~4
+# per account per day. Two syncs (2) plus balances once (1) leaves one spare
+# for a manual run; doing it on every run would spend the lot.
+if [[ "${SEB_SYNC_BALANCES:-auto}" == "always" ]] || \
+   { [[ "${SEB_SYNC_BALANCES:-auto}" == "auto" ]] && (( $(date +%H) < 12 )); }; then
+  if ! bal_out=$("$BIN" balances --commit 2>&1); then
+    # Non-fatal: transactions are already in, and a stale balance is a much
+    # smaller problem than a failed run that hides a successful sync.
+    log "WARN balances failed (transactions were fine):"
+    print -r -- "$bal_out" | while IFS= read -r line; do log "  $line"; done
+  else
+    print -r -- "$bal_out" | grep -Ev '^\s*$' | while IFS= read -r line; do
+      log "  $line"
+    done
+  fi
+fi
+
 log "--- run ok ---"
