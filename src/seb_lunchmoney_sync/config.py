@@ -17,14 +17,16 @@ def _env(key: str, default: str | None = None) -> str | None:
 
 @dataclass(frozen=True)
 class Config:
-    # 1Password lookup (personal account — op defaults to the Werlabs work
-    # account, so this is pinned explicitly).
-    op_account: str = _env("OP_ACCOUNT", "56RHUXXFBNAPJKCJUZ22YN36NE")
+    # 1Password coordinates. Deliberately un-defaulted: they describe one
+    # person's vault, and this repo is public. Set them in the environment (see
+    # .env.example) — `op` also defaults to whichever account it feels like, so
+    # OP_ACCOUNT should be pinned explicitly if you have more than one.
+    #
+    # Reference items by **ID, not title**: `op read` rejects titles containing
+    # characters like an em-dash ("invalid character in secret reference").
+    op_account: str = _env("OP_ACCOUNT", "")
     op_vault: str = _env("OP_VAULT", "Personal")
-    # Reference the item by ID, not title: the title contains an em-dash and
-    # `op read` rejects it ("invalid character in secret reference"). The item
-    # is "Enable Banking — klokie-lunchmoney-sync".
-    eb_item: str = _env("EB_ITEM", "emeupxndv2n6rj6a5ieun5qo6y")
+    eb_item: str = _env("EB_ITEM", "")
 
     # Enable Banking
     eb_base_url: str = _env("EB_BASE_URL", "https://api.enablebanking.com")
@@ -41,7 +43,7 @@ class Config:
 
     # Lunch Money
     lm_token_override: str | None = _env("LUNCHMONEY_API_TOKEN")
-    lm_op_item: str = _env("LM_OP_ITEM", "3vrk4of6otddew56uuo5icpofa")
+    lm_op_item: str = _env("LM_OP_ITEM", "")
     lm_op_field: str = _env("LM_OP_FIELD", "credential")
     lm_base_url: str = _env("LM_BASE_URL", "https://dev.lunchmoney.app")
 

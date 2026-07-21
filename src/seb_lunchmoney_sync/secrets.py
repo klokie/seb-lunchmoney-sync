@@ -24,6 +24,20 @@ def _op_read(ref: str) -> str:
     For unattended runs don't rely on this at all — `seb-sync bootstrap` writes
     the values to an env file so scheduled runs never invoke `op`.
     """
+    # The 1Password coordinates have no defaults (they describe a personal
+    # vault and this repo is public), so an unset one otherwise turns into a
+    # malformed ref like "op://Personal//credential".
+    if "//" in ref.removeprefix("op://") or ref.endswith("/"):
+        raise RuntimeError(
+            f"Incomplete 1Password reference: {ref}\n"
+            "Set OP_ACCOUNT / EB_ITEM / LM_OP_ITEM — see .env.example."
+        )
+    if not config.op_account:
+        raise RuntimeError(
+            "OP_ACCOUNT is not set, so `op` would guess the account.\n"
+            "Find it with `op account list` — see .env.example."
+        )
+
     try:
         out = subprocess.run(
             ["op", "read", "--account", config.op_account, ref],

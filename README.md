@@ -46,15 +46,37 @@ make run ARGS='--help'        # or: ./.venv/bin/seb-sync --help
 
 ## Secrets
 
-Pulled at runtime from **1Password** (personal account `grossfeld`, vault
-`Personal`) — nothing on disk:
+Interactively, everything is read from **1Password** via the `op` CLI — the
+Enable Banking private key and `application_id` from one item, the Lunch Money
+token from another. Point at your own items with `OP_ACCOUNT`, `EB_ITEM` and
+`LM_OP_ITEM`; see [`.env.example`](.env.example). Two gotchas worth knowing:
 
-- Enable Banking private key + `application_id` → item
-  _"Enable Banking — klokie-lunchmoney-sync"_.
-- Lunch Money token → item `3vrk4of6otddew56uuo5icpofa`, field `credential`.
+- **Reference items by ID, not title.** `op read` rejects titles containing
+  characters like an em-dash: _"invalid character in secret reference"_.
+- **Pin `OP_ACCOUNT`** if you are signed into more than one account, otherwise
+  `op` resolves against whichever it prefers.
 
-The `op` CLI defaults to the Werlabs work account, so `OP_ACCOUNT` pins the
-personal account id. Copy `.env.example` → `.env` to override any lookup.
+### Unattended runs
+
+A cron/launchd job cannot answer a 1Password unlock prompt, and 1Password
+service accounts need a Business/Teams plan. So resolve everything once and
+let scheduled runs read the result:
+
+```bash
+seb-sync bootstrap     # one unlock prompt -> ~/.config/enablebanking/env (0600)
+```
+
+Scheduled runs source that file and never invoke `op`:
+
+```bash
+set -a; . ~/.config/enablebanking/env; set +a
+seb-sync sync-all --commit
+```
+
+Of the three values, only the Lunch Money token is really a secret — the
+`application_id` is public (it travels as the JWT `kid` on every request) and
+the private key is already on disk at 0600. Re-run `bootstrap` after rotating
+anything.
 
 ## Usage
 
