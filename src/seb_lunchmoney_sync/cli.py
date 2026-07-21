@@ -41,11 +41,18 @@ def cli() -> None:
 
 
 @cli.command()
-def auth() -> None:
+@click.option(
+    "--psu-type",
+    type=click.Choice(["personal", "business"]),
+    default=None,
+    help="Must match the 'usage type' used when linking in the EB control panel.",
+)
+def auth(psu_type) -> None:
     """One-time BankID consent. Opens the bank's auth page, captures the
     redirect, and stores the session (valid ~90 days)."""
     eb = EnableBanking()
-    started = eb.start_authorization()
+    click.echo(f"psu_type={psu_type or config.eb_psu_type}")
+    started = eb.start_authorization(psu_type=psu_type)
     url = started.get("url")
     click.echo(f"Opening BankID consent:\n  {url}\n")
     click.echo("(Your browser will warn about the self-signed localhost cert — proceed.)")
@@ -57,6 +64,34 @@ def auth() -> None:
     click.echo(f"Session saved → {config.session_path}")
     for acc in session.get("accounts", []):
         click.echo(f"  account_uid={acc.get('uid')}  {acc.get('identification_hash','')}")
+
+
+@cli.command()
+def check() -> None:
+    """Verify the EB app accepts a JWT signed by our private key.
+
+    Read-only, no consent needed — the fastest way to tell whether the cert
+    currently uploaded to the Enable Banking app matches our local keypair.
+    `401 Wrong signature` means the app still holds a stale cert: upload
+    ~/.config/enablebanking/enablebanking-cert.pem in the EB dashboard.
+    """
+    import httpx
+
+    eb = EnableBanking()
+    try:
+        app = eb.application()
+    except httpx.HTTPStatusError as exc:
+        body = exc.response.text
+        click.echo(f"✗ HTTP {exc.response.status_code}: {body}")
+        if exc.response.status_code == 401 and "signature" in body.lower():
+            raise click.ClickException(
+                "The EB app's cert does not match the local private key.\n"
+                "Upload ~/.config/enablebanking/enablebanking-cert.pem to the "
+                "'klokie-lunchmoney-sync' app at enablebanking.com, then re-run."
+            )
+        raise click.ClickException("Unexpected auth failure — see body above.")
+    click.echo("✓ JWT accepted — cert matches. Ready for `seb-sync auth`.")
+    click.echo(json.dumps(app, indent=2))
 
 
 @cli.command()
@@ -96,7 +131,16 @@ def lm_assets() -> None:
 @click.option("--date-from", default=None, help="ISO date lower bound (YYYY-MM-DD).")
 @click.option("--dry-run/--commit", default=True, help="Print proposed inserts vs POST to Lunch Money.")
 @click.option("--limit", type=int, default=10, help="Rows to preview in dry-run.")
-def sync(account_uid, asset_id, date_from, dry_run, limit) -> None:
+@click.option(
+    "--include-pending",
+    is_flag=True,
+    default=False,
+    help="Include PDNG transactions. Off by default: pending rows have no "
+    "entry_reference, so their external_id is a hash of the value date — when "
+    "they later book they get a real reference AND a different date, which "
+    "would insert a second copy. Wait for them to book instead.",
+)
+def sync(account_uid, asset_id, date_from, dry_run, limit, include_pending) -> None:
     """Fetch SEB transactions and (dry-run) preview or insert into Lunch Money."""
     session = _load_session()
     if not account_uid:
@@ -109,6 +153,16 @@ def sync(account_uid, asset_id, date_from, dry_run, limit) -> None:
     eb = EnableBanking()
     raw = eb.transactions(account_uid, date_from=date_from)
     click.echo(f"Fetched {len(raw)} transactions from Enable Banking.")
+
+    if not include_pending:
+        pending = [t for t in raw if t.get("status") == "PDNG"]
+        if pending:
+            raw = [t for t in raw if t.get("status") != "PDNG"]
+            click.echo(
+                f"Skipping {len(pending)} pending (PDNG) — they re-appear with a "
+                f"stable id once booked. Use --include-pending to override."
+            )
+
     mapped = mapper.map_all(raw, asset_id)
 
     if dry_run:

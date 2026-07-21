@@ -53,9 +53,16 @@ class EnableBanking:
         r.raise_for_status()
         return r.json() if r.content else {}
 
+    def application(self) -> dict:
+        """Read back the registered application. Requires only a valid JWT, so
+        it doubles as a cert/keypair health check (see `seb-sync check`)."""
+        return self._request("GET", "/application")
+
     # --- consent / auth flow ---
 
-    def start_authorization(self, valid_days: int = 90) -> dict:
+    def start_authorization(
+        self, valid_days: int = 90, psu_type: str | None = None
+    ) -> dict:
         """Begin consent. Returns {url, authorization_id} — open `url` in a
         browser, authorize with BankID, get redirected to the callback."""
         valid_until = (
@@ -66,7 +73,7 @@ class EnableBanking:
             "aspsp": {"name": config.eb_aspsp_name, "country": config.eb_aspsp_country},
             "state": str(uuid.uuid4()),
             "redirect_url": config.eb_redirect_url,
-            "psu_type": config.eb_psu_type,
+            "psu_type": psu_type or config.eb_psu_type,
         }
         return self._request("POST", "/auth", json=body)
 

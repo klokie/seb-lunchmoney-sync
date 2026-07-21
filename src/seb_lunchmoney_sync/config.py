@@ -21,14 +21,21 @@ class Config:
     # account, so this is pinned explicitly).
     op_account: str = _env("OP_ACCOUNT", "56RHUXXFBNAPJKCJUZ22YN36NE")
     op_vault: str = _env("OP_VAULT", "Personal")
-    eb_item: str = _env("EB_ITEM", "Enable Banking — klokie-lunchmoney-sync")
+    # Reference the item by ID, not title: the title contains an em-dash and
+    # `op read` rejects it ("invalid character in secret reference"). The item
+    # is "Enable Banking — klokie-lunchmoney-sync".
+    eb_item: str = _env("EB_ITEM", "emeupxndv2n6rj6a5ieun5qo6y")
 
     # Enable Banking
     eb_base_url: str = _env("EB_BASE_URL", "https://api.enablebanking.com")
     eb_redirect_url: str = _env("EB_REDIRECT_URL", "https://localhost:8080/callback")
     eb_aspsp_name: str = _env("EB_ASPSP_NAME", "SEB")
     eb_aspsp_country: str = _env("EB_ASPSP_COUNTRY", "SE")
-    eb_psu_type: str = _env("EB_PSU_TYPE", "business")
+    # Must match how the account was linked in the EB control panel (the
+    # "usage type" dropdown). Accounts were linked as `personal` on 2026-07-18;
+    # asking for a `business` session against them fails. Override per-run with
+    # `seb-sync auth --psu-type business` when linking the S2A corporate account.
+    eb_psu_type: str = _env("EB_PSU_TYPE", "personal")
     eb_application_id_override: str | None = _env("EB_APPLICATION_ID")
     eb_private_key_path: str | None = _env("EB_PRIVATE_KEY_PATH")
 
