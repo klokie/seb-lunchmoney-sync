@@ -58,6 +58,21 @@ class EnableBanking:
             if r.status_code != 429:
                 r.raise_for_status()
                 return r.json() if r.content else {}
+
+            # Two very different 429s. ASPSP_RATE_LIMIT_EXCEEDED is the bank's
+            # own PSD2 quota — regulation caps unattended access at 4 requests
+            # per account per day — so the window is hours, not seconds, and
+            # retrying only burns time (and possibly quota). Fail immediately
+            # and say so. Anything else is short-term throttling worth a retry.
+            if (r.json() if r.content else {}).get("error") == "ASPSP_RATE_LIMIT_EXCEEDED":
+                raise RuntimeError(
+                    "The bank (not Enable Banking) refused: daily PSD2 quota "
+                    "exhausted. Unattended access is capped at ~4 requests per "
+                    "account per day and resets on the bank's own clock — "
+                    "retrying now will not help. Reduce the schedule, or count "
+                    "manual runs against the same budget."
+                )
+
             if attempt == 3:
                 raise RuntimeError(
                     "Enable Banking is rate-limiting (429) and did not recover "

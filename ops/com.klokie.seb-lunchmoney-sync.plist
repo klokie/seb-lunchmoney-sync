@@ -12,9 +12,16 @@
   Remove:
     launchctl bootout gui/$(id -u)/com.klokie.seb-lunchmoney-sync
 
-  Four times a day rather than hourly: Enable Banking rate-limits, and SEB
-  settles in batches, so more frequent polling buys nothing. Missed runs (lid
-  shut) fire on wake, and the sync is idempotent so a catch-up run is harmless.
+  TWICE a day, and that ceiling is regulatory rather than a preference. PSD2
+  caps unattended account access at ~4 requests per account per day, enforced
+  by the bank (ASPSP_RATE_LIMIT_EXCEEDED, not Enable Banking). Each run costs
+  one request per account, so a 4x/day schedule spends the entire budget and
+  any manual `sync-all` then fails for the rest of the day — which is exactly
+  what happened on 2026-07-18.
+
+  Two scheduled runs leave two in reserve for manual runs and re-consent.
+  Missed runs (lid shut) fire on wake, and the sync is idempotent so a catch-up
+  run is harmless.
 -->
 <plist version="1.0">
 <dict>
@@ -29,8 +36,6 @@
     <key>StartCalendarInterval</key>
     <array>
         <dict><key>Hour</key><integer>8</integer><key>Minute</key><integer>10</integer></dict>
-        <dict><key>Hour</key><integer>12</integer><key>Minute</key><integer>10</integer></dict>
-        <dict><key>Hour</key><integer>16</integer><key>Minute</key><integer>10</integer></dict>
         <dict><key>Hour</key><integer>20</integer><key>Minute</key><integer>10</integer></dict>
     </array>
 
