@@ -33,9 +33,20 @@ def _op_read(ref: str) -> str:
         )
     except FileNotFoundError:
         raise RuntimeError(
-            f"Need {ref} but the `op` CLI is not available.\n"
+            f"Need {ref} but the `op` CLI is not installed.\n"
             "For unattended runs, source the env file written by "
             "`seb-sync bootstrap`:\n"
+            "  set -a; . ~/.config/enablebanking/env; set +a"
+        ) from None
+    except subprocess.CalledProcessError as exc:
+        # Usually 1Password is locked, or this is a non-interactive shell that
+        # cannot prompt — exactly the case scheduled runs hit.
+        detail = (exc.stderr or "").strip().splitlines()
+        raise RuntimeError(
+            f"`op` could not read {ref}"
+            + (f" ({detail[-1]})" if detail else "")
+            + ".\nIf this is an unattended run, source the env file from "
+            "`seb-sync bootstrap` instead:\n"
             "  set -a; . ~/.config/enablebanking/env; set +a"
         ) from None
     return out.stdout.strip()
@@ -48,8 +59,9 @@ def enablebanking_private_key() -> str:
             return fh.read()
     try:
         return _op_read(f"op://{config.op_vault}/{config.eb_item}/credential")
-    except subprocess.CalledProcessError:
-        # Fall back to the local copy used during setup.
+    except RuntimeError:
+        # _op_read normalizes "op missing / locked / non-interactive" to
+        # RuntimeError. Fall back to the local copy used during setup.
         path = os.path.expanduser("~/.config/enablebanking/enablebanking-private.pem")
         with open(path) as fh:
             return fh.read()

@@ -37,11 +37,27 @@ def _load_session() -> dict:
 
 
 @click.group()
-def cli() -> None:
+def _cli() -> None:
     """SEB → Lunch Money sync."""
 
 
-@cli.command()
+def cli() -> None:
+    """Entry point. Turns expected runtime failures (rate limiting, a missing
+    `op`, an unusable session) into a single-line error, because these mostly
+    surface in an unattended log where a traceback is just noise."""
+    try:
+        _cli.main(standalone_mode=False)
+    except click.ClickException as exc:
+        exc.show()
+        raise SystemExit(exc.exit_code)
+    except click.Abort:
+        raise SystemExit(130)
+    except RuntimeError as exc:
+        click.echo(f"Error: {exc}", err=True)
+        raise SystemExit(1)
+
+
+@_cli.command()
 @click.option(
     "--psu-type",
     type=click.Choice(["personal", "business"]),
@@ -67,7 +83,7 @@ def auth(psu_type) -> None:
         click.echo(f"  account_uid={acc.get('uid')}  {acc.get('identification_hash','')}")
 
 
-@cli.command()
+@_cli.command()
 @click.option(
     "--env-file",
     default="~/.config/enablebanking/env",
@@ -125,7 +141,7 @@ def bootstrap(env_file, force) -> None:
     click.echo("  seb-sync sync --account-uid <uid> --asset-id <id> --date-from <d> --commit")
 
 
-@cli.command()
+@_cli.command()
 def check() -> None:
     """Verify the EB app accepts a JWT signed by our private key.
 
@@ -173,7 +189,7 @@ def check() -> None:
     click.echo(json.dumps(app, indent=2))
 
 
-@cli.command()
+@_cli.command()
 def accounts() -> None:
     """List accounts from the saved session."""
     session = _load_session()
@@ -185,7 +201,7 @@ def accounts() -> None:
         click.echo(json.dumps(acc, indent=2))
 
 
-@cli.command(name="lm-assets")
+@_cli.command(name="lm-assets")
 def lm_assets() -> None:
     """List Lunch Money manually-managed assets (to find --asset-id)."""
     lm = LunchMoney()
@@ -204,7 +220,7 @@ def lm_assets() -> None:
         )
 
 
-@cli.command()
+@_cli.command()
 @click.option("--account-uid", help="Enable Banking account uid (default: first in session).")
 @click.option("--asset-id", type=int, default=None, help="Lunch Money asset id to attach to.")
 @click.option("--date-from", default=None, help="ISO date lower bound (YYYY-MM-DD).")
@@ -260,7 +276,7 @@ def _norm_payee(p: str | None) -> str:
     return (p or "").strip().upper()
 
 
-@cli.command(name="sync-all")
+@_cli.command(name="sync-all")
 @click.option("--dry-run/--commit", default=True, help="Preview vs actually insert.")
 @click.option(
     "--date-tolerance",

@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  SEB -> Lunch Money sync, 4x/day on gatekeeper.
+
+  Install:
+    cp ops/com.klokie.seb-lunchmoney-sync.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.klokie.seb-lunchmoney-sync.plist
+  Run once now:
+    launchctl kickstart -p gui/$(id -u)/com.klokie.seb-lunchmoney-sync
+  Remove:
+    launchctl bootout gui/$(id -u)/com.klokie.seb-lunchmoney-sync
+
+  Four times a day rather than hourly: Enable Banking rate-limits, and SEB
+  settles in batches, so more frequent polling buys nothing. Missed runs (lid
+  shut) fire on wake, and the sync is idempotent so a catch-up run is harmless.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.klokie.seb-lunchmoney-sync</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/klokie/src/seb-lunchmoney-sync/bin/scheduled-sync.sh</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict><key>Hour</key><integer>8</integer><key>Minute</key><integer>10</integer></dict>
+        <dict><key>Hour</key><integer>12</integer><key>Minute</key><integer>10</integer></dict>
+        <dict><key>Hour</key><integer>16</integer><key>Minute</key><integer>10</integer></dict>
+        <dict><key>Hour</key><integer>20</integer><key>Minute</key><integer>10</integer></dict>
+    </array>
+
+    <!-- The script keeps its own timestamped log; these catch anything that
+         escapes it (interpreter errors, launchd complaints). -->
+    <key>StandardOutPath</key>
+    <string>/Users/klokie/Library/Logs/seb-lunchmoney-sync.launchd.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/klokie/Library/Logs/seb-lunchmoney-sync.launchd.log</string>
+
+    <!-- Off deliberately: loading the agent should not fire a sync, so
+         installing it stays a no-op you can reason about. -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>
