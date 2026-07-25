@@ -276,6 +276,71 @@ def _norm_payee(p: str | None) -> str:
     return (p or "").strip().upper()
 
 
+def _amount_key(value) -> str:
+    return f"{abs(float(value)):.2f}"
+
+
+def select_new(
+    mapped: list[dict], existing: list[dict], start: str
+) -> list[dict]:
+    """Transactions to insert: those Lunch Money doesn't already have by
+    `external_id`.
+
+    Deliberately the *only* dedup rule for steady-state syncing. Each real
+    transaction has its own stable Enable Banking `entry_reference`, so two
+    genuine same-amount/same-payee purchases get distinct external_ids and are
+    both kept, while a re-run of the same transaction reuses its id and is
+    skipped. No amount/date heuristic — that would silently drop legitimate
+    repeated purchases (see `find_cross_source` for the migration-only case).
+
+    Pure and side-effect free so it can be unit-tested without the network.
+    """
+    seen_ids = {t.get("external_id") for t in existing if t.get("external_id")}
+    out = []
+    for m in mapped:
+        if not m.get("date") or m["date"] < start:
+            continue
+        if m.get("external_id") in seen_ids:
+            continue
+        out.append(m)
+    return out
+
+
+def find_cross_source(
+    mapped: list[dict], existing: list[dict], window_days: int = 3
+) -> list[tuple[dict, list[dict]]]:
+    """Fresh transactions that are new by `external_id` yet look like they may
+    already exist from another source — same |amount| and payee within
+    `window_days`, but a different id (e.g. a prior Lunch Flow / GoCardless row,
+    which the two providers date 1–2 days apart).
+
+    Read-only and non-committal on purpose: it *surfaces* ambiguity for a human
+    during a migration backfill instead of guessing. Returns
+    (fresh_txn, [matching_existing_rows]) pairs. Pure/testable.
+    """
+    seen_ids = {t.get("external_id") for t in existing if t.get("external_id")}
+    by_key: dict[tuple[str, str], list[dict]] = {}
+    for t in existing:
+        by_key.setdefault(
+            (_amount_key(t["amount"]), _norm_payee(t.get("payee"))), []
+        ).append(t)
+
+    pairs: list[tuple[dict, list[dict]]] = []
+    for m in mapped:
+        if m.get("external_id") in seen_ids:
+            continue
+        key = (_amount_key(m["amount"]), _norm_payee(m["payee"]))
+        d = dt.date.fromisoformat(m["date"])
+        near = [
+            t
+            for t in by_key.get(key, [])
+            if abs((d - dt.date.fromisoformat(t["date"])).days) <= window_days
+        ]
+        if near:
+            pairs.append((m, near))
+    return pairs
+
+
 def _load_account_map(map_file: str) -> dict:
     return json.loads(Path(os.path.expanduser(map_file)).read_text())
 
@@ -350,21 +415,12 @@ def balances(dry_run, map_file) -> None:
 @_cli.command(name="sync-all")
 @click.option("--dry-run/--commit", default=True, help="Preview vs actually insert.")
 @click.option(
-    "--date-tolerance",
-    type=int,
-    default=3,
-    show_default=True,
-    help="Days of slack when matching against existing rows. Lunch Flow dated "
-    "the same transaction 1-2 days off from Enable Banking, so exact date "
-    "matching would duplicate the handover period.",
-)
-@click.option(
     "--lookback-days",
     type=int,
     default=14,
     show_default=True,
-    help="How far back to re-examine. Bigger is safe — anything already in "
-    "Lunch Money is filtered out, so this only costs a little API time.",
+    help="How far back to re-examine. Bigger is safe — rows already in Lunch "
+    "Money (by external_id) are filtered out, so this only costs API time.",
 )
 @click.option(
     "--map-file",
@@ -373,22 +429,41 @@ def balances(dry_run, map_file) -> None:
     help="IBAN → asset_id map. Keyed by IBAN because account_uids rotate on "
     "every re-consent.",
 )
-def sync_all(dry_run, date_tolerance, lookback_days, map_file) -> None:
+@click.option(
+    "--reconcile",
+    is_flag=True,
+    default=False,
+    help="Read-only. Instead of inserting, list transactions that look like "
+    "they already exist from another source (same amount+payee within a few "
+    "days but a different external_id) — e.g. a prior Lunch Flow / GoCardless "
+    "sync. Run this ONCE when adopting an account that already has history, to "
+    "spot overlap before a wide backfill. Never writes.",
+)
+@click.option(
+    "--reconcile-window",
+    type=int,
+    default=3,
+    show_default=True,
+    help="Days of slack when looking for cross-source matches under --reconcile.",
+)
+def sync_all(dry_run, lookback_days, map_file, reconcile, reconcile_window) -> None:
     """Sync every mapped account, inserting only what Lunch Money lacks.
 
-    Built for repeated unattended runs. Rather than tracking a high-water mark
-    (which loses transactions that post later on a day already synced), this
-    re-examines a window and filters against what Lunch Money actually holds:
+    Dedup is by `external_id` alone. Enable Banking gives every transaction a
+    stable `entry_reference`, so re-running never duplicates, and two genuinely
+    repeated purchases (same amount, same payee, days apart) are both kept —
+    they have different references. This is safe to run unattended at any
+    frequency and never silently drops a real transaction.
 
-      * same `external_id`  → already inserted by this tool
-      * same (date, |amount|) → almost certainly the same transaction from
-        another sync (Lunch Flow/GoCardless rows carry different external_ids,
-        so id-matching alone would happily duplicate them)
-
-    That makes the run idempotent and safe at any frequency.
+    The one thing external_id can't catch is the *same* transaction arriving
+    under a different id from another sync (a prior Lunch Flow / GoCardless
+    feed). That only matters while migrating an account that already has such
+    history. Use `--reconcile` (read-only) once to see the overlap, or simply
+    scope the first run to your switch-over date — don't back-fill across a
+    window another tool already covered.
     """
     session = _load_session()
-    mapping = json.loads(Path(os.path.expanduser(map_file)).read_text())
+    mapping = _load_account_map(map_file)
 
     today = dt.date.today()
     start = (today - dt.timedelta(days=lookback_days)).isoformat()
@@ -407,32 +482,27 @@ def sync_all(dry_run, date_tolerance, lookback_days, map_file) -> None:
 
         asset_id, label = entry["asset_id"], entry["label"]
         existing = lm.transactions(asset_id, start, end)
-        seen_ids = {t.get("external_id") for t in existing if t.get("external_id")}
-        # (amount, payee) -> dates already present. Deliberately NOT keyed on
-        # date: Lunch Flow/GoCardless dated the same transaction 1-2 days
-        # differently from Enable Banking, so exact date matching would let
-        # historical rows through as "new" and duplicate them.
-        seen_by_amt: dict[tuple[str, str], list[dt.date]] = {}
-        for t in existing:
-            key = (f'{abs(float(t["amount"])):.2f}', _norm_payee(t.get("payee")))
-            seen_by_amt.setdefault(key, []).append(dt.date.fromisoformat(t["date"]))
-
         raw = [t for t in eb.transactions(acc["uid"], date_from=start)
                if t.get("status") != "PDNG"]
         mapped = mapper.map_all(raw, asset_id)
 
-        fresh = []
-        for m in mapped:
-            if not m["date"] or m["date"] < start:
-                continue
-            if m["external_id"] in seen_ids:
-                continue
-            key = (f'{abs(float(m["amount"])):.2f}', _norm_payee(m["payee"]))
-            near = seen_by_amt.get(key, [])
-            d = dt.date.fromisoformat(m["date"])
-            if any(abs((d - o).days) <= date_tolerance for o in near):
-                continue
-            fresh.append(m)
+        if reconcile:
+            pairs = find_cross_source(mapped, existing, reconcile_window)
+            click.echo(
+                f"{'?' if pairs else '–'} {label}: {len(pairs)} possible "
+                f"cross-source duplicate(s) among {len(mapped)} from SEB"
+            )
+            for m, near in pairs:
+                click.echo(f"    NEW  {m['date']}  {m['amount']:>12}  {m['payee'][:34]}")
+                for t in near:
+                    src = "ours" if t.get("external_id") else "other-source"
+                    click.echo(
+                        f"    ~in-LM {t['date']}  {t['amount']:>12}  "
+                        f"{(t.get('payee') or '')[:30]:<30} [{src}]"
+                    )
+            continue
+
+        fresh = select_new(mapped, existing, start)
 
         click.echo(
             f"{'•' if fresh else '–'} {label}: {len(existing)} in LM, "
@@ -446,7 +516,9 @@ def sync_all(dry_run, date_tolerance, lookback_days, map_file) -> None:
             res = lm.insert_transactions(fresh)
             click.echo(f"    inserted {len(res.get('ids', []))}")
 
-    if dry_run:
+    if reconcile:
+        click.echo("\nRECONCILE (read-only) — nothing written.")
+    elif dry_run:
         click.echo(f"\nDRY RUN — {grand_total} would be inserted. Use --commit.")
     else:
         click.echo(f"\nDone — {grand_total} inserted.")

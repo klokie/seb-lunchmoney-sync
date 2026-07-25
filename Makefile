@@ -6,7 +6,7 @@ PY ?= /opt/homebrew/bin/python3.13
 VENV := .venv
 BIN := $(VENV)/bin
 
-.PHONY: venv install run auth sync clean reinstall
+.PHONY: venv install run auth sync test clean reinstall
 
 $(BIN)/python:
 	$(PY) -m venv $(VENV)
@@ -14,9 +14,12 @@ $(BIN)/python:
 
 venv: $(BIN)/python ## create the venv
 
-install: venv ## install the package (editable) into the venv
-	$(BIN)/python -m pip install -e .
+install: venv ## install the package (editable, with test deps) into the venv
+	$(BIN)/python -m pip install -e '.[test]'
 	@echo "OK — run with: make run ARGS='--help'  (or ./$(BIN)/seb-sync ...)"
+
+test: ## run the unit tests
+	$(BIN)/python -m pytest -q
 
 run: ## run the CLI: make run ARGS='sync --dry-run'
 	$(BIN)/seb-sync $(ARGS)

@@ -34,10 +34,15 @@ verified against live data; `sync` defaults to `--dry-run`.
 Behaviour worth knowing before you point it at an account that already has
 history:
 
-- **`sync-all` only inserts what Lunch Money lacks.** It compares on
-  `external_id` and on (amount, payee) within a few days' tolerance, because
-  two providers routinely date the same transaction differently. Safe to run
-  repeatedly.
+- **`sync-all` only inserts what Lunch Money lacks**, deduping on `external_id`
+  alone. Enable Banking gives every transaction a stable `entry_reference`, so
+  re-running never duplicates and two genuine repeated purchases (same amount
+  and payee, days apart) are both kept. Safe to run unattended at any frequency.
+- **Migrating an account that already has history from another sync?** Point the
+  first run at your switch-over date (`sync --date-from`) so you don't re-import
+  rows a previous tool already added — `external_id` can't recognise them,
+  because that other tool used different ids. `sync-all --reconcile` (read-only)
+  lists any such overlap so you can check before a wide back-fill.
 - **Pending transactions are skipped by default.** They carry no stable id, so
   inserting one now means a duplicate when it books later. `--include-pending`
   if you want them anyway.
@@ -50,7 +55,7 @@ registering an Enable Banking application.
 
 ## Install
 
-Requires Python 3.10+ and an [Enable Banking](https://enablebanking.com)
+Requires Python 3.11+ and an [Enable Banking](https://enablebanking.com)
 application (free self-serve; see [Setup](#setup)).
 
 ```bash
