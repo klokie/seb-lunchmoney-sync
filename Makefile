@@ -1,8 +1,12 @@
-# Always use an isolated venv built from a real Homebrew Python.
-# Avoids the broken/polluted Anaconda base env (bad interpreter + conda
-# dependency-resolver conflicts on bare `pip install`).
+# Always use an isolated venv built from a real system Python.
+# On macOS this avoids the broken/polluted Anaconda base env (bad interpreter +
+# conda dependency-resolver conflicts on bare `pip install`), which is why the
+# Homebrew interpreter is named explicitly rather than trusting `python3`.
+# Override with: make install PY=/path/to/python3
 
-PY ?= /opt/homebrew/bin/python3.13
+PY ?= $(shell test -x /opt/homebrew/bin/python3.13 \
+        && echo /opt/homebrew/bin/python3.13 \
+        || command -v python3)
 VENV := .venv
 BIN := $(VENV)/bin
 

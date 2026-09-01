@@ -1,17 +1,30 @@
 #!/bin/zsh
-# Unattended SEB -> Lunch Money sync. Driven by launchd; see
-# ops/com.klokie.seb-lunchmoney-sync.plist.
+# Unattended SEB -> Lunch Money sync. Driven by launchd (macOS) or a systemd
+# user timer (Linux); see ops/README.md for both.
 #
 # Deliberately does NOT depend on the `op` CLI: launchd jobs cannot answer a
 # 1Password unlock prompt. Secrets come from the env file written by
 # `seb-sync bootstrap` (re-run that after rotating a credential).
+#
+# sync-all also warns (never deletes) when another sync appears to be writing
+# duplicates into the same Lunch Money assets — grep the log for
+# "DUPLICATE WARNING".
 
 set -u
 setopt pipefail
 
 REPO="${SEB_SYNC_REPO:-$HOME/src/seb-lunchmoney-sync}"
 ENV_FILE="${SEB_SYNC_ENV:-$HOME/.config/enablebanking/env}"
-LOG="${SEB_SYNC_LOG:-$HOME/Library/Logs/seb-lunchmoney-sync.log}"
+# macOS keeps logs in ~/Library/Logs; elsewhere follow the XDG state dir.
+# Both schedulers set SEB_SYNC_LOG explicitly, so this only covers manual runs.
+if [[ -z "${SEB_SYNC_LOG:-}" ]]; then
+  if [[ -d "$HOME/Library/Logs" ]]; then
+    SEB_SYNC_LOG="$HOME/Library/Logs/seb-lunchmoney-sync.log"
+  else
+    SEB_SYNC_LOG="${XDG_STATE_HOME:-$HOME/.local/state}/seb-lunchmoney-sync.log"
+  fi
+fi
+LOG="$SEB_SYNC_LOG"
 BIN="$REPO/.venv/bin/seb-sync"
 
 mkdir -p "$(dirname "$LOG")"

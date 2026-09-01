@@ -1,0 +1,17 @@
+# Twice a day. NOT hourly: SEB's PSD2 quota is ~4 requests per account per day
+# and each run costs 1 (the morning run costs 2, it also writes balances), so
+# this spends 3 and leaves one spare for a manual run.
+
+[Unit]
+Description=SEB -> Lunch Money sync at 08:10 and 20:10
+
+[Timer]
+OnCalendar=*-*-* 08:10:00
+OnCalendar=*-*-* 20:10:00
+# Missed runs (laptop asleep) fire on wake. The sync is idempotent, so
+# catching up is harmless.
+Persistent=true
+RandomizedDelaySec=180
+
+[Install]
+WantedBy=timers.target

@@ -341,6 +341,67 @@ def find_cross_source(
     return pairs
 
 
+def find_foreign_duplicates(
+    mapped: list[dict], existing: list[dict], window_days: int = 3
+) -> list[tuple[dict, dict]]:
+    """Rows already in Lunch Money that duplicate one of *ours* but arrived
+    from a different sync.
+
+    `select_new` cannot see this. It dedupes on `external_id`, so when a second
+    feed (a Lunch Flow / GoCardless connection assumed dead, say) inserts the
+    same transaction under its own id *after* we inserted ours, both rows sit
+    in the ledger and nothing ever complains. That happened here over
+    2026-07/08: 94 duplicated rows across three accounts, unnoticed for six
+    weeks, roughly doubling reported spending.
+
+    "Ours" is the set of external_ids Enable Banking just gave us for this
+    window — no guessing about which id shape belongs to whom, and it keeps
+    working if the other provider changes theirs. Anything else in the window
+    carrying an external_id (so: from some automated feed, not a hand-entered
+    row) that matches one of ours on |amount| + payee within `window_days` is
+    reported.
+
+    Pairing is greedy, 1:1 and date-nearest, so a genuine repeated purchase —
+    two identical coffees days apart, or the recurring 818 kr Swish payments —
+    can be claimed at most once and cannot fan out into a pile of false
+    positives.
+
+    Read-only by design: returns (foreign_row, our_row) pairs for a human. The
+    two feeds date and name the same transaction differently, so deleting
+    automatically here would eventually destroy real data — the exact class of
+    bug that got the old fuzzy match removed from the insert path.
+    """
+    ours_ids = {m.get("external_id") for m in mapped if m.get("external_id")}
+    ours_rows = [t for t in existing if t.get("external_id") in ours_ids]
+
+    by_key: dict[tuple[str, str], list[dict]] = {}
+    for t in ours_rows:
+        by_key.setdefault(
+            (_amount_key(t["amount"]), _norm_payee(t.get("payee"))), []
+        ).append(t)
+
+    claimed: set[int] = set()
+    pairs: list[tuple[dict, dict]] = []
+    for f in sorted(existing, key=lambda t: t["date"]):
+        eid = f.get("external_id")
+        if not eid or eid in ours_ids:
+            continue
+        d = dt.date.fromisoformat(f["date"])
+        best: tuple[int, dict] | None = None
+        for t in by_key.get(
+            (_amount_key(f["amount"]), _norm_payee(f.get("payee"))), []
+        ):
+            if id(t) in claimed:
+                continue
+            gap = abs((d - dt.date.fromisoformat(t["date"])).days)
+            if gap <= window_days and (best is None or gap < best[0]):
+                best = (gap, t)
+        if best is not None:
+            claimed.add(id(best[1]))
+            pairs.append((f, best[1]))
+    return pairs
+
+
 def _load_account_map(map_file: str) -> dict:
     return json.loads(Path(os.path.expanduser(map_file)).read_text())
 
@@ -446,7 +507,24 @@ def balances(dry_run, map_file) -> None:
     show_default=True,
     help="Days of slack when looking for cross-source matches under --reconcile.",
 )
-def sync_all(dry_run, lookback_days, map_file, reconcile, reconcile_window) -> None:
+@click.option(
+    "--dup-window",
+    type=int,
+    default=3,
+    show_default=True,
+    help="Days of slack for the always-on duplicate guard (rows another sync "
+    "wrote on top of ours). 0 disables the guard.",
+)
+@click.option(
+    "--dup-limit",
+    type=int,
+    default=5,
+    show_default=True,
+    help="Duplicate pairs to print per account before summarising the rest.",
+)
+def sync_all(
+    dry_run, lookback_days, map_file, reconcile, reconcile_window, dup_window, dup_limit
+) -> None:
     """Sync every mapped account, inserting only what Lunch Money lacks.
 
     Dedup is by `external_id` alone. Enable Banking gives every transaction a
@@ -457,10 +535,14 @@ def sync_all(dry_run, lookback_days, map_file, reconcile, reconcile_window) -> N
 
     The one thing external_id can't catch is the *same* transaction arriving
     under a different id from another sync (a prior Lunch Flow / GoCardless
-    feed). That only matters while migrating an account that already has such
-    history. Use `--reconcile` (read-only) once to see the overlap, or simply
-    scope the first run to your switch-over date — don't back-fill across a
-    window another tool already covered.
+    feed). Use `--reconcile` (read-only) once before adopting an account that
+    already has such history, or simply scope the first run to your switch-over
+    date — don't back-fill across a window another tool already covered.
+
+    That is only the *migration* case, though. If the other feed is still live
+    it keeps writing on top of us forever, so every run also reports rows that
+    look duplicated from another source (`--dup-window 0` to silence). It only
+    ever warns; deleting is a human's call.
     """
     session = _load_session()
     mapping = _load_account_map(map_file)
@@ -472,6 +554,7 @@ def sync_all(dry_run, lookback_days, map_file, reconcile, reconcile_window) -> N
     eb = EnableBanking()
     lm = LunchMoney()
     grand_total = 0
+    grand_foreign = 0
 
     for acc in session.get("accounts", []):
         iban = (acc.get("account_id") or {}).get("iban")
@@ -511,6 +594,32 @@ def sync_all(dry_run, lookback_days, map_file, reconcile, reconcile_window) -> N
         for m in fresh:
             click.echo(f"    {m['date']}  {m['amount']:>12}  {m['payee'][:38]}")
 
+        # Costs nothing extra — both sides are already in memory — and it is
+        # the only thing that notices a second sync quietly double-writing into
+        # the same asset. Warn, never delete: see find_foreign_duplicates.
+        foreign = (
+            find_foreign_duplicates(mapped, existing, dup_window)
+            if dup_window > 0
+            else []
+        )
+        if foreign:
+            grand_foreign += len(foreign)
+            click.echo(
+                f"  ! {label}: {len(foreign)} row(s) look like duplicates from "
+                f"another sync — review, nothing was deleted"
+            )
+            for f, ours in foreign[:dup_limit]:
+                click.echo(
+                    f"      other {f['date']}  {f['amount']:>11}  "
+                    f"{(f.get('payee') or '')[:30]:<30} id={f.get('id')}"
+                )
+                click.echo(
+                    f"      ours  {ours['date']}  {ours['amount']:>11}  "
+                    f"{(ours.get('payee') or '')[:30]:<30} id={ours.get('id')}"
+                )
+            if len(foreign) > dup_limit:
+                click.echo(f"      … and {len(foreign) - dup_limit} more")
+
         grand_total += len(fresh)
         if fresh and not dry_run:
             res = lm.insert_transactions(fresh)
@@ -522,6 +631,14 @@ def sync_all(dry_run, lookback_days, map_file, reconcile, reconcile_window) -> N
         click.echo(f"\nDRY RUN — {grand_total} would be inserted. Use --commit.")
     else:
         click.echo(f"\nDone — {grand_total} inserted.")
+
+    # Last line so it survives a `tail` of the log, and worded to be greppable.
+    if grand_foreign:
+        click.echo(
+            f"! DUPLICATE WARNING — {grand_foreign} row(s) across all accounts "
+            f"appear to come from another sync writing into the same assets. "
+            f"Nothing deleted. Disconnect the other feed, then clean up by hand."
+        )
 
 
 if __name__ == "__main__":

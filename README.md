@@ -23,8 +23,9 @@ Your bank ──(BankID / bank consent)──> Enable Banking API ──> sync �
 - **Aggregator:** Enable Banking (Restricted Production), JWT-signed REST API.
 - **Sink:** Lunch Money API (`POST /v1/transactions`), chunked insert with
   `external_id` dedupe.
-- **Schedule:** any interval — `sync-all` is idempotent. A launchd example is
-  in [`ops/`](ops/).
+- **Schedule:** twice a day; `sync-all` is idempotent, but the bank's PSD2
+  quota (~4 requests/account/day) is the real limit. systemd and launchd units
+  plus the reasoning are in [`ops/`](ops/README.md).
 
 ## Status
 
@@ -43,6 +44,14 @@ history:
   rows a previous tool already added — `external_id` can't recognise them,
   because that other tool used different ids. `sync-all --reconcile` (read-only)
   lists any such overlap so you can check before a wide back-fill.
+- **Turn the other sync off, don't just assume it's dead.** If it keeps writing,
+  it writes _on top of_ this one forever: its rows carry its own ids, so
+  `external_id` dedupe never sees them and the ledger silently doubles. Every
+  `sync-all` run therefore also reports rows that look like duplicates from
+  another source and ends with a greppable `DUPLICATE WARNING` line. It only
+  ever warns — the two feeds date and name the same transaction differently, so
+  deleting automatically would eventually destroy real data. `--dup-window 0`
+  silences it.
 - **Pending transactions are skipped by default.** They carry no stable id, so
   inserting one now means a duplicate when it books later. `--include-pending`
   if you want them anyway.
@@ -74,8 +83,8 @@ conflicts. Override the interpreter with `make install PY=/path/to/python3`.
 
 1. Register an application at
    [enablebanking.com](https://enablebanking.com) — Production (Restricted)
-   lets you whitelist your own accounts. Choose *"Generate outside the browser
-   and import public certificate"* and paste in your certificate:
+   lets you whitelist your own accounts. Choose _"Generate outside the browser
+   and import public certificate"_ and paste in your certificate:
    ```bash
    openssl genrsa -out private.key 2048
    openssl req -new -x509 -days 3650 -key private.key -out public.crt \
@@ -84,7 +93,7 @@ conflicts. Override the interpreter with `make install PY=/path/to/python3`.
    The certificate **cannot be replaced later** — rotating the key means
    registering a new application.
 2. Link your account in the control panel ("Activate by linking accounts").
-   Note the *usage type* you pick: it must match `EB_PSU_TYPE`.
+   Note the _usage type_ you pick: it must match `EB_PSU_TYPE`.
 3. Copy `.env.example` → `.env` and fill in the ids, or run
    `seb-sync bootstrap` if you keep secrets in 1Password.
 4. `seb-sync check` → `seb-sync auth` → `seb-sync sync-all --dry-run`.
@@ -95,7 +104,10 @@ every re-consent):
 
 ```json
 {
-  "SE0000000000000000000000": { "asset_id": 123456, "label": "Everyday account" }
+  "SE0000000000000000000000": {
+    "asset_id": 123456,
+    "label": "Everyday account"
+  }
 }
 ```
 
@@ -147,6 +159,7 @@ seb-sync lm-assets                  # list Lunch Money assets (to find asset_id)
 
 seb-sync sync-all --dry-run         # preview across all mapped accounts
 seb-sync sync-all --commit          # insert whatever Lunch Money is missing
+seb-sync sync-all --reconcile       # read-only: overlap with a previous sync
 
 # single account, explicit window
 seb-sync sync --account-uid <uid> --asset-id <N> --date-from 2026-07-01 --dry-run
@@ -155,17 +168,23 @@ seb-sync sync --account-uid <uid> --asset-id <N> --date-from 2026-07-01 --dry-ru
 `sync-all` is what you schedule; `sync` is for one-off backfills where you want
 to control the date range yourself.
 
+> [!warning] Every call to the bank costs quota
+> SEB caps unattended access at **~4 requests per account per day** and a
+> `--dry-run` costs exactly as much as a `--commit`. The twice-daily schedule
+> already spends 3, so budget your manual runs. `ASPSP_RATE_LIMIT_EXCEEDED`
+> means wait for the bank's day to roll over; retrying does not help.
+
 ## Components
 
-| Module               | Role                                                       |
-| -------------------- | ---------------------------------------------------------- |
-| `config.py`          | env-driven config + defaults                               |
-| `secrets.py`         | resolve key/app_id/token from 1Password (`op`, pinned acct)|
-| `enablebanking.py`   | JWT auth, consent flow, sessions, transactions             |
-| `lunchmoney.py`      | thin Lunch Money client (`POST /v1/transactions`)          |
-| `mapper.py`          | EB transaction → Lunch Money insert (+ `external_id` dedupe)|
-| `callback_server.py` | one-shot HTTPS `localhost:8080` listener for the redirect  |
-| `cli.py`             | `auth` / `accounts` / `sync` commands                      |
+| Module               | Role                                                         |
+| -------------------- | ------------------------------------------------------------ |
+| `config.py`          | env-driven config + defaults                                 |
+| `secrets.py`         | resolve key/app_id/token from 1Password (`op`, pinned acct)  |
+| `enablebanking.py`   | JWT auth, consent flow, sessions, transactions               |
+| `lunchmoney.py`      | thin Lunch Money client (`POST /v1/transactions`)            |
+| `mapper.py`          | EB transaction → Lunch Money insert (+ `external_id` dedupe) |
+| `callback_server.py` | one-shot HTTPS `localhost:8080` listener for the redirect    |
+| `cli.py`             | `auth` / `accounts` / `sync` commands                        |
 
 Reference pattern: `ynab-api-import` (aggregator → budgeting app).
 
