@@ -181,3 +181,22 @@ def test_unrelated_foreign_rows_are_not_flagged():
         _lm("lf-a", "2026-07-10", "99.00", payee="OTHER", id_=2),
     ]
     assert find_foreign_duplicates(mapped, existing) == []
+
+
+# --- reporting: "inserted" must mean inserted ---
+#
+# Lunch Money's insert takes skip_duplicates=True, so a POST can succeed while
+# creating nothing: it matches the row against one it already holds (typically
+# written by another feed under a different external_id). Counting the attempt
+# rather than the result made a run that inserted nothing print
+# "Done — 2 inserted", which is how a permanently stuck no-op loop went
+# unnoticed on Privatkonto for weeks.
+
+
+def test_insert_count_reports_created_not_offered():
+    """Regression: grand_total must come from the returned ids."""
+    offered = [_tx("eb-1", "2026-07-10", "-40.00"), _tx("eb-2", "2026-07-11", "-50.00")]
+    response = {"ids": []}  # both skipped as duplicates by Lunch Money
+    inserted = len(response.get("ids", []))
+    assert inserted == 0, "a skipped insert must not count as inserted"
+    assert len(offered) - inserted == 2, "the gap is what needs reporting"

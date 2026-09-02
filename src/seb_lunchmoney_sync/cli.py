@@ -657,6 +657,7 @@ def sync_all(
     lm = LunchMoney()
     grand_total = 0
     grand_foreign = 0
+    grand_rejected = 0
 
     for acc in session.get("accounts", []):
         iban = (acc.get("account_id") or {}).get("iban")
@@ -722,10 +723,32 @@ def sync_all(
             if len(foreign) > dup_limit:
                 click.echo(f"      … and {len(foreign) - dup_limit} more")
 
-        grand_total += len(fresh)
-        if fresh and not dry_run:
+        if dry_run:
+            grand_total += len(fresh)
+        elif fresh:
             res = lm.insert_transactions(fresh)
-            click.echo(f"    inserted {len(res.get('ids', []))}")
+            # Count what Lunch Money actually created, not what we offered it.
+            # `skip_duplicates` means a POST can succeed while inserting
+            # nothing, and reporting the attempt as the result reads as success.
+            inserted = len(res.get("ids", []))
+            grand_total += inserted
+            click.echo(f"    inserted {inserted}")
+
+            if inserted < len(fresh):
+                # Lunch Money matched these against a row it already holds. Our
+                # own external_id dedupe cannot have produced them, so the
+                # existing row came from somewhere else — the same cross-source
+                # overlap find_foreign_duplicates looks for, reported here by
+                # the server instead of inferred by us.
+                rejected = len(fresh) - inserted
+                grand_rejected += rejected
+                click.echo(
+                    f"  ! {label}: Lunch Money rejected {rejected} of "
+                    f"{len(fresh)} as duplicates of rows it already has — "
+                    f"another feed almost certainly wrote them. This repeats "
+                    f"every run until those rows go or the window moves past "
+                    f"them."
+                )
 
     if reconcile:
         click.echo("\nRECONCILE (read-only) — nothing written.")
@@ -733,6 +756,11 @@ def sync_all(
         click.echo(f"\nDRY RUN — {grand_total} would be inserted. Use --commit.")
     else:
         click.echo(f"\nDone — {grand_total} inserted.")
+        if grand_rejected:
+            click.echo(
+                f"! {grand_rejected} row(s) were rejected by Lunch Money as "
+                f"duplicates of rows another feed already wrote."
+            )
 
     # Last line so it survives a `tail` of the log, and worded to be greppable.
     if grand_foreign:
