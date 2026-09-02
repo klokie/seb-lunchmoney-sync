@@ -17,13 +17,39 @@ Going hourly would spend the budget before lunch and every later run would fail
 with `ASPSP_RATE_LIMIT_EXCEEDED` until the bank's day rolls over. Retrying does
 not help.
 
+## Two profiles
+
+One bank consent covers one `psu_type`. A business consent alongside a personal
+one is therefore a second _profile_, not a second account in the same map:
+
+|                             | personal                  | business                 |
+| --------------------------- | ------------------------- | ------------------------ |
+| session (`EB_SESSION_PATH`) | `session.json`            | `session-business.json`  |
+| map (`SEB_SYNC_MAP`)        | `accounts.json`           | `accounts-business.json` |
+| log (`SEB_SYNC_LOG`)        | `seb-lunchmoney-sync.log` | `…-business.log`         |
+| timer                       | 08:10 / 20:10             | 12:10 / 23:10            |
+
+Both run the same `bin/scheduled-sync.sh`; only the environment differs. The
+quota is per _account_, so the profiles do not compete for it — the offset slots
+are about not running two consents at once and keeping the logs readable.
+
 ## Linux (systemd user units)
 
 ```bash
 cp ops/systemd/seb-lunchmoney-sync.{service,timer} ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now seb-lunchmoney-sync.timer
+
+# business profile, once its consent and map exist
+cp ops/systemd/seb-lunchmoney-sync-business.{service,timer} ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now seb-lunchmoney-sync-business.timer
 ```
+
+> [!danger] Don't enable a profile while another sync still feeds those assets
+> Two live feeds writing the same Lunch Money asset duplicate every row: the
+> dedupe is per-`external_id` and each feed uses its own ids. Disconnect the old
+> one first, then scope the first run to the switch-over date.
 
 Check it:
 

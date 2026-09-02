@@ -1,0 +1,17 @@
+# Deliberately offset from the personal timer (08:10 / 20:10).
+#
+# The PSD2 quota is per *account*, so the two profiles do not actually compete
+# for it — different accounts, separate budgets. The separation is about not
+# running two consents concurrently and keeping the two logs readable.
+
+[Unit]
+Description=SEB Företag -> Lunch Money sync at 12:10 and 23:10
+
+[Timer]
+OnCalendar=*-*-* 12:10:00
+OnCalendar=*-*-* 23:10:00
+Persistent=true
+RandomizedDelaySec=180
+
+[Install]
+WantedBy=timers.target

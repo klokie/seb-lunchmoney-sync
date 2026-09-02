@@ -1,0 +1,21 @@
+# SEB Företag (business consent) — the second profile.
+# Same wrapper as the personal unit; only the session, map, log and timer slot
+# differ. Install: see ops/README.md.
+
+[Unit]
+Description=SEB Företag -> Lunch Money sync (Enable Banking API)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=SEB_SYNC_REPO=%h/src/seb-lunchmoney-sync
+Environment=SEB_SYNC_ENV=%h/.config/enablebanking/env
+Environment=SEB_SYNC_LOG=%h/.local/state/seb-lunchmoney-sync-business.log
+Environment=SEB_SYNC_PROFILE=business
+# The business consent, NOT the personal session.json.
+Environment=EB_SESSION_PATH=%h/.config/enablebanking/session-business.json
+Environment=SEB_SYNC_MAP=%h/.config/enablebanking/accounts-business.json
+Environment=PATH=%h/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+WorkingDirectory=%h/src/seb-lunchmoney-sync
+ExecStart=/usr/bin/zsh %h/src/seb-lunchmoney-sync/bin/scheduled-sync.sh
