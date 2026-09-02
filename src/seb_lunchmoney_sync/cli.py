@@ -11,6 +11,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import urllib.parse
 import webbrowser
 from pathlib import Path
 
@@ -57,6 +58,44 @@ def cli() -> None:
         raise SystemExit(1)
 
 
+def _confirm_target_session() -> None:
+    """Warn before a bank round if the destination already holds a session.
+
+    `auth` writes to `config.session_path` (EB_SESSION_PATH, default
+    session.json). Authorizing a *second* consent — a business one alongside a
+    working personal one — silently destroys the first unless that variable is
+    set. Ask up front, not after the bank round: a prompt you hit *after* SCA
+    means re-doing the whole thing to answer it.
+    """
+    p = Path(os.path.expanduser(config.session_path))
+    if not p.exists():
+        return
+    try:
+        cur = json.loads(p.read_text())
+    except (OSError, json.JSONDecodeError):
+        return
+    click.echo(
+        f"! {p} already holds a {cur.get('psu_type')} session with "
+        f"{len(cur.get('accounts', []))} account(s), valid until "
+        f"{(cur.get('access') or {}).get('valid_until')}"
+    )
+    click.echo("  Set EB_SESSION_PATH to keep both (e.g. a session-business.json).")
+    click.confirm("  Overwrite it?", abort=True)
+
+
+def _code_from(raw: str) -> str:
+    """Accept either a bare code or the whole callback URL pasted from the
+    browser's address bar — which is what you actually have in hand when the
+    redirect failed to reach the listener."""
+    raw = raw.strip()
+    if "code=" in raw:
+        qs = urllib.parse.urlparse(raw).query or raw.split("?", 1)[-1]
+        found = urllib.parse.parse_qs(qs).get("code")
+        if found:
+            return found[0]
+    return raw
+
+
 @_cli.command()
 @click.option(
     "--psu-type",
@@ -64,23 +103,86 @@ def cli() -> None:
     default=None,
     help="Must match the 'usage type' used when linking in the EB control panel.",
 )
-def auth(psu_type) -> None:
+@click.option(
+    "--manual",
+    is_flag=True,
+    default=False,
+    help="Don't run the callback listener. Prints the consent URL and waits for "
+    "you to paste the code (or the whole redirect URL) back. Use this whenever "
+    "the browser is on a different machine than this command — over SSH the "
+    "redirect hits the browser host's localhost, not this one.",
+)
+@click.option(
+    "--code",
+    default=None,
+    help="Exchange an authorization code you already have. Recovers a run whose "
+    "redirect never reached the listener, without spending another bank round — "
+    "codes are short-lived, so do it promptly. Accepts the full callback URL too.",
+)
+def auth(psu_type, manual, code) -> None:
     """One-time BankID consent. Opens the bank's auth page, captures the
-    redirect, and stores the session (valid ~90 days)."""
+    redirect, and stores the session (valid ~90 days) at EB_SESSION_PATH.
+
+    The default flow serves a one-shot HTTPS listener on localhost:8080, which
+    only works if the browser completing the consent runs on THIS machine. If
+    it doesn't (SSH, headless, a remote container), use `--manual` and paste the
+    code back, or `--code` to redeem one you already captured.
+    """
     eb = EnableBanking()
+    _confirm_target_session()
+
+    if code:
+        session = eb.create_session(_code_from(code))
+        _save_session(session)
+        click.echo(f"Session saved → {config.session_path}")
+        _describe_session(session)
+        return
+
     click.echo(f"psu_type={psu_type or config.eb_psu_type}")
     started = eb.start_authorization(psu_type=psu_type)
     url = started.get("url")
     click.echo(f"Opening BankID consent:\n  {url}\n")
-    click.echo("(Your browser will warn about the self-signed localhost cert — proceed.)")
-    if url:
-        webbrowser.open(url)
-    code = callback_server.wait_for_code()
-    session = eb.create_session(code)
+
+    if manual:
+        click.echo("Complete the consent in any browser, then paste what the")
+        click.echo("redirect lands on — the whole URL is fine, code= is enough.")
+        raw = click.prompt("code (or callback URL)")
+        session = eb.create_session(_code_from(raw))
+    else:
+        click.echo(
+            "(Your browser will warn about the self-signed localhost cert — proceed.)"
+        )
+        if url:
+            webbrowser.open(url)
+        try:
+            captured = callback_server.wait_for_code()
+        except OSError as exc:
+            # Almost always a previous `auth` still sitting on the port. The
+            # bank round has already been spent by this point, so say how to
+            # rescue it rather than just dying.
+            raise click.ClickException(
+                f"Could not listen on {config.callback_host}:{config.callback_port} "
+                f"({exc}).\n"
+                f"  Something else holds the port — often an earlier `auth` still "
+                f"waiting. Find it with:  ss -lntp | grep {config.callback_port}\n"
+                f"  This consent round is still usable: complete it in the browser, "
+                f"then run\n"
+                f"    seb-sync auth --code '<the callback URL>'"
+            ) from exc
+        session = eb.create_session(captured)
+
     _save_session(session)
     click.echo(f"Session saved → {config.session_path}")
+    _describe_session(session)
+
+
+def _describe_session(session: dict) -> None:
+    click.echo(f"  psu_type    {session.get('psu_type')}")
+    click.echo(f"  valid_until {(session.get('access') or {}).get('valid_until')}")
     for acc in session.get("accounts", []):
-        click.echo(f"  account_uid={acc.get('uid')}  {acc.get('identification_hash','')}")
+        iban = ((acc.get("account_id") or {}).get("iban")) or ""
+        masked = f"{iban[:6]}…{iban[-4:]}" if len(iban) > 10 else iban
+        click.echo(f"  {masked}  {acc.get('product')}  uid={acc.get('uid')}")
 
 
 @_cli.command()

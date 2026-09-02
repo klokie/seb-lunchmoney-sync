@@ -154,6 +154,8 @@ anything.
 ```bash
 seb-sync check                      # cert health + consent days remaining
 seb-sync auth                       # one-time bank consent (~90-day session)
+seb-sync auth --manual              # same, but paste the code back yourself
+seb-sync auth --code '<url|code>'   # redeem a code a failed redirect left you
 seb-sync accounts                   # list authorized accounts + uids
 seb-sync lm-assets                  # list Lunch Money assets (to find asset_id)
 
@@ -167,6 +169,25 @@ seb-sync sync --account-uid <uid> --asset-id <N> --date-from 2026-07-01 --dry-ru
 
 `sync-all` is what you schedule; `sync` is for one-off backfills where you want
 to control the date range yourself.
+
+> [!warning] `auth` over SSH needs `--manual`
+> The default flow serves a one-shot HTTPS listener on `localhost:8080` and
+> waits for the bank to redirect to it. That only works if the browser
+> completing the consent runs on the **same machine** as the command — over SSH
+> the redirect hits the browser host's localhost and the listener waits forever.
+> Use `--manual` and paste the code back. If you only realise afterwards, the
+> round is not wasted: copy the callback URL out of the address bar and run
+> `seb-sync auth --code '<url>'` promptly, before the code expires.
+
+> [!warning] `auth` writes to one file — set `EB_SESSION_PATH` for a second consent
+> Authorizing a business consent alongside a personal one overwrites the first
+> unless you redirect the write. `auth` now warns and asks before clobbering a
+> populated session, _before_ spending the bank round.
+>
+> ```bash
+> EB_SESSION_PATH=~/.config/enablebanking/session-business.json \
+>   seb-sync auth --psu-type business --manual
+> ```
 
 > [!warning] Every call to the bank costs quota
 > SEB caps unattended access at **~4 requests per account per day** and a
