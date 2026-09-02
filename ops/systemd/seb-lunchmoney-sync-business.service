@@ -16,6 +16,11 @@ Environment=SEB_SYNC_PROFILE=business
 # The business consent, NOT the personal session.json.
 Environment=EB_SESSION_PATH=%h/.config/enablebanking/session-business.json
 Environment=SEB_SYNC_MAP=%h/.config/enablebanking/accounts-business.json
+# These accounts came over from Lunch Flow, which left rows in Lunch Money that
+# carry ITS external_ids -- so a wide window would re-insert them as "new".
+# Keep this narrow until the log has been clean for a few days, then drop the
+# line to fall back to the 14-day default.
+Environment=SEB_SYNC_LOOKBACK=2
 Environment=PATH=%h/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 WorkingDirectory=%h/src/seb-lunchmoney-sync
 ExecStart=/usr/bin/zsh %h/src/seb-lunchmoney-sync/bin/scheduled-sync.sh

@@ -26,6 +26,17 @@ if [[ -n "$MAP_FILE" ]]; then
 else
   map_args=()
 fi
+
+# How far back sync-all re-examines. The default (14d) is right in steady
+# state -- rows already in Lunch Money are filtered out, so a wide window only
+# costs API time. It is NOT right for the first runs after taking an account
+# over from another sync: dedupe is per-external_id, so anything the previous
+# feed wrote inside the window looks new and gets inserted a second time.
+# Start a migrated profile at 2 and raise it once the log is clean.
+sync_args=("${map_args[@]}")
+if [[ -n "${SEB_SYNC_LOOKBACK:-}" ]]; then
+  sync_args+=(--lookback-days "$SEB_SYNC_LOOKBACK")
+fi
 # macOS keeps logs in ~/Library/Logs; elsewhere follow the XDG state dir.
 # Both schedulers set SEB_SYNC_LOG explicitly, so this only covers manual runs.
 if [[ -z "${SEB_SYNC_LOG:-}" ]]; then
@@ -66,7 +77,7 @@ if ! check_out=$("$BIN" check 2>&1); then
 fi
 log "$(print -r -- "$check_out" | grep -E '^[✓!]' | tr '\n' ' ')"
 
-if ! sync_out=$("$BIN" sync-all --commit "${map_args[@]}" 2>&1); then
+if ! sync_out=$("$BIN" sync-all --commit "${sync_args[@]}" 2>&1); then
   log "FAIL sync-all:"
   print -r -- "$sync_out" | while IFS= read -r line; do log "  $line"; done
   exit 1
