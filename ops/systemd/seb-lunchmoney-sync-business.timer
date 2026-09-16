@@ -3,12 +3,17 @@
 # The PSD2 quota is per *account*, so the two profiles do not actually compete
 # for it — different accounts, separate budgets. The separation is about not
 # running two consents concurrently and keeping the two logs readable.
+#
+# The morning slot MUST be before 12:00. scheduled-sync.sh only runs `balances`
+# when the hour is < 12, so a 12:10 slot silently skipped balances entirely —
+# this profile never wrote one from 2026-09-02 to 09-16, and the asset balances
+# drifted on inserted transactions instead of being read from the bank.
 
 [Unit]
-Description=SEB Företag -> Lunch Money sync at 12:10 and 23:10
+Description=SEB Företag -> Lunch Money sync at 11:10 and 23:10
 
 [Timer]
-OnCalendar=*-*-* 12:10:00
+OnCalendar=*-*-* 11:10:00
 OnCalendar=*-*-* 23:10:00
 Persistent=true
 RandomizedDelaySec=180
