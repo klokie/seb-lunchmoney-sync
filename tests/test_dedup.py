@@ -200,3 +200,22 @@ def test_insert_count_reports_created_not_offered():
     inserted = len(response.get("ids", []))
     assert inserted == 0, "a skipped insert must not count as inserted"
     assert len(offered) - inserted == 2, "the gap is what needs reporting"
+
+
+def test_account_key_prefers_iban_then_card_id_then_hash():
+    from seb_lunchmoney_sync.cli import account_key
+
+    assert account_key({"account_id": {"iban": "SE00"}, "identification_hash": "h"}) == "SE00"
+    card = {"account_id": {"other": {"identification": "5555 **** 1234"}}, "identification_hash": "h"}
+    assert account_key(card) == "5555 **** 1234"
+    assert account_key({"account_id": {}, "identification_hash": "h"}) == "h"
+    assert account_key({}) == ""
+
+
+def test_is_settled_keeps_only_booked_rows():
+    from seb_lunchmoney_sync.cli import is_settled
+
+    assert is_settled({"status": "BOOK"})
+    assert is_settled({})  # EB default
+    for s in ("PDNG", "OTHR", "RJCT"):  # Coop sends OTHR authorizations + RJCT declines
+        assert not is_settled({"status": s})

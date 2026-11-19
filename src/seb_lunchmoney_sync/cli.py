@@ -119,7 +119,15 @@ def _code_from(raw: str) -> str:
     "redirect never reached the listener, without spending another bank round — "
     "codes are short-lived, so do it promptly. Accepts the full callback URL too.",
 )
-def auth(psu_type, manual, code) -> None:
+@click.option(
+    "--valid-days",
+    type=int,
+    default=90,
+    show_default=True,
+    help="Consent length. SEB caps at 90; Coop Mastercard allows 180 (see the "
+    "ASPSP's maximum_consent_validity). Longer = fewer BankID rounds.",
+)
+def auth(psu_type, manual, code, valid_days) -> None:
     """One-time BankID consent. Opens the bank's auth page, captures the
     redirect, and stores the session (valid ~90 days) at EB_SESSION_PATH.
 
@@ -139,7 +147,7 @@ def auth(psu_type, manual, code) -> None:
         return
 
     click.echo(f"psu_type={psu_type or config.eb_psu_type}")
-    started = eb.start_authorization(psu_type=psu_type)
+    started = eb.start_authorization(valid_days=valid_days, psu_type=psu_type)
     url = started.get("url")
     click.echo(f"Opening BankID consent:\n  {url}\n")
 
@@ -180,9 +188,10 @@ def _describe_session(session: dict) -> None:
     click.echo(f"  psu_type    {session.get('psu_type')}")
     click.echo(f"  valid_until {(session.get('access') or {}).get('valid_until')}")
     for acc in session.get("accounts", []):
-        iban = ((acc.get("account_id") or {}).get("iban")) or ""
-        masked = f"{iban[:6]}…{iban[-4:]}" if len(iban) > 10 else iban
+        key = account_key(acc)
+        masked = f"{key[:6]}…{key[-4:]}" if len(key) > 10 else key
         click.echo(f"  {masked}  {acc.get('product')}  uid={acc.get('uid')}")
+        click.echo(f"    map key: {key}")
 
 
 @_cli.command()
@@ -504,6 +513,36 @@ def find_foreign_duplicates(
     return pairs
 
 
+def is_settled(tx: dict) -> bool:
+    """Only booked rows go to Lunch Money.
+
+    SEB reports BOOK or PDNG. Card issuers report more: Coop Mastercard sends
+    every purchase twice — once as OTHR (the card authorization, mixed-case
+    payee) and again as BOOK when it settles, each with its own
+    entry_reference — plus RJCT for declined attempts. Anything but BOOK would
+    either duplicate a purchase or record one that never happened. A missing
+    status is treated as booked (EB's default).
+    """
+    return (tx.get("status") or "BOOK") == "BOOK"
+
+
+def account_key(acc: dict) -> str:
+    """The key an account is mapped by in the accounts*.json map.
+
+    IBAN for bank accounts: account_uids rotate on every re-consent, IBANs
+    don't. Card accounts (Coop Mastercard, SEB Kort) have no IBAN, so fall back
+    to the scheme identification (usually a masked PAN), then to Enable
+    Banking's `identification_hash`, which is also stable across consents.
+    """
+    ident = acc.get("account_id") or {}
+    if ident.get("iban"):
+        return ident["iban"]
+    other = ident.get("other") or {}
+    if other.get("identification"):
+        return str(other["identification"])
+    return acc.get("identification_hash") or ""
+
+
 def _load_account_map(map_file: str) -> dict:
     return json.loads(Path(os.path.expanduser(map_file)).read_text())
 
@@ -558,8 +597,7 @@ def balances(dry_run, map_file) -> None:
     now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat()
 
     for acc in session.get("accounts", []):
-        iban = (acc.get("account_id") or {}).get("iban")
-        entry = mapping.get(iban or "")
+        entry = mapping.get(account_key(acc))
         if not entry:
             continue
         asset_id, label = entry["asset_id"], entry["label"]
@@ -624,8 +662,18 @@ def balances(dry_run, map_file) -> None:
     show_default=True,
     help="Duplicate pairs to print per account before summarising the rest.",
 )
+@click.option(
+    "--since",
+    default=None,
+    help="Hard floor (YYYY-MM-DD): never look before this date, whatever "
+    "--lookback-days says. For an account taken over from another feed — set it "
+    "to the first day that feed did NOT cover, so the lookback can never reach "
+    "back into its rows. Unlike a short lookback it doesn't drop late bookings "
+    "once the window has moved on.",
+)
 def sync_all(
-    dry_run, lookback_days, map_file, reconcile, reconcile_window, dup_window, dup_limit
+    dry_run, lookback_days, map_file, reconcile, reconcile_window, dup_window, dup_limit,
+    since,
 ) -> None:
     """Sync every mapped account, inserting only what Lunch Money lacks.
 
@@ -651,6 +699,8 @@ def sync_all(
 
     today = dt.date.today()
     start = (today - dt.timedelta(days=lookback_days)).isoformat()
+    if since and since > start:
+        start = since
     end = (today + dt.timedelta(days=365)).isoformat()  # pending sit in the future
 
     eb = EnableBanking()
@@ -660,16 +710,16 @@ def sync_all(
     grand_rejected = 0
 
     for acc in session.get("accounts", []):
-        iban = (acc.get("account_id") or {}).get("iban")
-        entry = mapping.get(iban or "")
+        key = account_key(acc)
+        entry = mapping.get(key)
         if not entry:
-            click.echo(f"– {acc.get('product')} ({iban}): not in map, skipping.")
+            click.echo(f"– {acc.get('product')} ({key}): not in map, skipping.")
             continue
 
         asset_id, label = entry["asset_id"], entry["label"]
         existing = lm.transactions(asset_id, start, end)
         raw = [t for t in eb.transactions(acc["uid"], date_from=start)
-               if t.get("status") != "PDNG"]
+               if is_settled(t)]
         mapped = mapper.map_all(raw, asset_id)
 
         if reconcile:

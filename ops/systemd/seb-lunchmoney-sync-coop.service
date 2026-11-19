@@ -1,0 +1,22 @@
+# Coop Mastercard (Entercard) — the third profile. Same wrapper; only the
+# session, map, log, start floor and timer slot differ. Install: ops/README.md.
+
+[Unit]
+Description=Coop Mastercard -> Lunch Money sync (Enable Banking API)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=SEB_SYNC_REPO=%h/src/seb-lunchmoney-sync
+Environment=SEB_SYNC_ENV=%h/.config/enablebanking/env
+Environment=SEB_SYNC_LOG=%h/.local/state/seb-lunchmoney-sync-coop.log
+Environment=SEB_SYNC_PROFILE=coop
+Environment=EB_SESSION_PATH=%h/.config/enablebanking/session-coop.json
+Environment=SEB_SYNC_MAP=%h/.config/enablebanking/accounts-coop.json
+# Taken over from Lunch Flow on 2026-11-19. Lunch Flow covered everything
+# booked up to 2026-11-17; never let the lookback reach into its rows.
+Environment=SEB_SYNC_SINCE=2026-11-18
+Environment=PATH=%h/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+WorkingDirectory=%h/src/seb-lunchmoney-sync
+ExecStart=/usr/bin/zsh %h/src/seb-lunchmoney-sync/bin/scheduled-sync.sh

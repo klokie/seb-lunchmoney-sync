@@ -37,6 +37,11 @@ sync_args=("${map_args[@]}")
 if [[ -n "${SEB_SYNC_LOOKBACK:-}" ]]; then
   sync_args+=(--lookback-days "$SEB_SYNC_LOOKBACK")
 fi
+# Absolute floor for a taken-over account: the first day the old feed did not
+# cover. Safer than a short lookback, which drops late bookings.
+if [[ -n "${SEB_SYNC_SINCE:-}" ]]; then
+  sync_args+=(--since "$SEB_SYNC_SINCE")
+fi
 # macOS keeps logs in ~/Library/Logs; elsewhere follow the XDG state dir.
 # Both schedulers set SEB_SYNC_LOG explicitly, so this only covers manual runs.
 if [[ -z "${SEB_SYNC_LOG:-}" ]]; then

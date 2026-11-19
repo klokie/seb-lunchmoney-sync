@@ -1,0 +1,14 @@
+# Morning slot must be before 12:00 — scheduled-sync.sh only writes balances
+# when the hour is < 12.
+
+[Unit]
+Description=Coop Mastercard -> Lunch Money sync at 09:10 and 21:10
+
+[Timer]
+OnCalendar=*-*-* 09:10:00
+OnCalendar=*-*-* 21:10:00
+Persistent=true
+RandomizedDelaySec=180
+
+[Install]
+WantedBy=timers.target

@@ -22,12 +22,18 @@ not help.
 One bank consent covers one `psu_type`. A business consent alongside a personal
 one is therefore a second _profile_, not a second account in the same map:
 
-|                             | personal                  | business                 |
-| --------------------------- | ------------------------- | ------------------------ |
-| session (`EB_SESSION_PATH`) | `session.json`            | `session-business.json`  |
-| map (`SEB_SYNC_MAP`)        | `accounts.json`           | `accounts-business.json` |
-| log (`SEB_SYNC_LOG`)        | `seb-lunchmoney-sync.log` | `…-business.log`         |
-| timer                       | 08:10 / 20:10             | 12:10 / 23:10            |
+|                             | personal                  | business                 | coop (Coop Mastercard) |
+| --------------------------- | ------------------------- | ------------------------ | ---------------------- |
+| session (`EB_SESSION_PATH`) | `session.json`            | `session-business.json`  | `session-coop.json`    |
+| map (`SEB_SYNC_MAP`)        | `accounts.json`           | `accounts-business.json` | `accounts-coop.json`   |
+| log (`SEB_SYNC_LOG`)        | `seb-lunchmoney-sync.log` | `…-business.log`         | `…-coop.log`           |
+| timer                       | 08:10 / 20:10             | 11:10 / 23:10            | 09:10 / 21:10          |
+
+Card accounts have no IBAN, so the map key falls back to the scheme
+identification (Coop: the BBAN-style account number), then EB's
+`identification_hash`. `seb-sync auth` prints the key to use. Card issuers also
+report authorizations (`OTHR`) and declines (`RJCT`) next to booked rows; only
+`BOOK` is synced. Coop allows 180-day consents: `auth --valid-days 180`.
 
 Both run the same `bin/scheduled-sync.sh`; only the environment differs. The
 quota is per _account_, so the profiles do not compete for it — the offset slots
